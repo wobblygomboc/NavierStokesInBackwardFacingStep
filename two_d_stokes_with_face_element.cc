@@ -106,8 +106,8 @@ namespace Global_Physical_Variables
 #include "unstructured_backward_step_mesh.h"
 
   /// \short Newtonian stress tensor
-  DenseMatrix<double> stress(const DenseMatrix<double>& du_dx,
-			     const double p)
+  DenseMatrix<double> get_stress(const DenseMatrix<double>& du_dx,
+				 const double& p)
   {
     // \tau_{ij}
     DenseMatrix<double> stress(2,2);
@@ -125,7 +125,7 @@ namespace Global_Physical_Variables
   }
   
   /// Non-singular part of the solution for testing
-  Vector<double> u_non_singular(const Vector<double>& x);
+  void u_non_singular(const Vector<double>& x, Vector<double>& u);
 
   /// \short "Singular" function and gradient
   void singular_fct_and_gradient(const Vector<double>& x,
@@ -231,9 +231,10 @@ namespace Global_Physical_Variables
   }
 
   /// Exact solution
-  Vector<double> u_exact(const Vector<double>& x)
+  void u_exact(const Vector<double>& x, Vector<double>& u)
   {
-    Vector<double> u(3);
+    // make sure we have the right amount of storage
+    u.resize(3);
     
     if (!CommandLineArgs::command_line_flag_has_been_set
 	("--suppress_sing_in_exact_soln"))
@@ -249,13 +250,12 @@ namespace Global_Physical_Variables
 
     // Add non-singular part of the solution
     Vector<double> u_reg(3);
-    u_reg = u_non_singular(x);
+    u_non_singular(x, u_reg);
       
     for(unsigned i=0; i<2; i++)
     {
       u[i] += u_reg[i];
     }
-    return u;
   }
 
   // QUEHACERES dudx ("flux") should be changed to traction
@@ -266,26 +266,17 @@ namespace Global_Physical_Variables
 				   DenseMatrix<double>& dudx)
   {
     // QUEHACERES needs updating
-    u=0.1*(sin(MathematicalConstants::Pi * x[0]/2.0)*
-	   sinh(MathematicalConstants::Pi * x[1]/2.0));
-    dudx[0]=MathematicalConstants::Pi/2.0*
-      0.1*(cos(MathematicalConstants::Pi * x[0]/2.0)*
-	   sinh(MathematicalConstants::Pi * x[1]/2.0));
-    dudx[1]=MathematicalConstants::Pi/2.0*
-      0.1*(sin(MathematicalConstants::Pi * x[0]/2.0)*
-	   cosh(MathematicalConstants::Pi * x[1]/2.0));
+    
   }
 
 
   /// Non-singular part of the solution for testing
-  Vector<double> u_non_singular(const Vector<double>& x)
+  void u_non_singular(const Vector<double>& x, Vector<double>& u)
   {
-    Vector<double>u(3);
+    u.resize(3);
     DenseMatrix<double> dudx(2,2);
     
     u_and_gradient_non_singular(x, u, dudx);
-
-    return u;
   }
 
   // QUEHACERES update this
@@ -342,23 +333,28 @@ namespace Global_Physical_Variables
     }
 
     // regular and singular parts of the solution        
-    Vector<double> u_reg  = u_non_singular(x);
+    Vector<double> u_reg;
+    u_non_singular(x, u_reg);
+    
     Vector<double> u_sing = singular_fct(x);
 
-    // reset flux
-    flux = 0;
+    // // reset flux
+    // flux = 0;
     
-    // flux is u.n
-    for(unsigned i=0; i<2; i++)
-    {      
-      flux += normal[i] * (u_reg[i] + u_sing[i]);
-    }
+    // // flux is u.n
+    // for(unsigned i=0; i<2; i++)
+    // {      
+    //   flux += normal[i] * (u_reg[i] + u_sing[i]);
+    // }
   }
 
   /// Function to specify boundary conditions
   Vector<double> u_BC(const Vector<double>& x)
   {
-    return u_exact(x);
+    Vector<double> u;
+    u_exact(x, u);
+
+    return u;
   }
 
 } // end_of_namespace
@@ -854,8 +850,6 @@ StepProblem<ELEMENT>::StepProblem()
   // Complete problem setup
   complete_problem_setup();
     
-
-
   // // hierher kill
   // {
   //  oomph_info << "imposing amplitude; removve thiis!\n";
@@ -900,7 +894,7 @@ void StepProblem<ELEMENT>::complete_problem_setup()
 	Bulk_mesh_pt->element_pt(e));
 
       // Tell bulk element which function computes the stress
-      bulk_elem_pt->stress_fct_pt() = &Global_Physical_Variables::stress;
+      bulk_el_pt->stress_fct_pt() = &Global_Physical_Variables::get_stress;
       
       // Tell the bulk element about the singular fct
       bulk_el_pt->navier_stokes_sing_el_pt() =
@@ -1056,14 +1050,18 @@ void StepProblem<ELEMENT>::apply_boundary_conditions()
      
       // Specify desired nodal values for compound solution
       unsigned nnod = el_pt->nnode();
-      Vector<double> nodal_boundary_value(nnod, 0.0);
+
+      // matrix to store velocities at each boundary node
+      DenseMatrix<double> nodal_boundary_value(nnod, DIM);
 
       // Unpin the FE part of the solution
       for (unsigned j=0; j<nnod; j++)
       {
-	el_pt->unpin_u_fe_at_specified_local_node(j);
-
-	// QUEHACERES this needs to change, if we have the enriched region,
+	for(unsigned i=0; i<DIM; i++)
+	{
+	  el_pt->unpin_u_fe_at_specified_local_node(j, i);
+	}
+	// QUEHACERES this needs to change - if we have the enriched region,
 	// we probably have 3 dofs for u,v,p, and 2 Lagrange multipliers for each of
 	// u and v (for continuity across the jump and for the Dirichlet BCs), so 3+2x2 = 7 dofs.
 	// leaving it for now as it won't be 3 anyways
@@ -1095,22 +1093,21 @@ void StepProblem<ELEMENT>::apply_boundary_conditions()
 	x[0] = nod_pt->x(0);
 	x[1] = nod_pt->x(1);
 
+	// get velocity from boundary conditions at this point
 	Vector<double> u(DIM);
 	u = Global_Physical_Variables::u_BC(x);
-
+	
+	// assign to the matrix of nodal values
 	for(unsigned i=0; i<DIM; i++)
 	{
 	  nodal_boundary_value(j,i) = u[i];
 	}
       }
      
-      // Tell the element about the desired nodal boundary values
+      // Tell the element about these nodal boundary values
       el_pt->set_nodal_boundary_values(nodal_boundary_value);
     }
-
   }
-
-
 
 } // end set bc
 
@@ -1167,7 +1164,7 @@ void StepProblem<ELEMENT>::doc_solution(DocInfo& doc_info)
   double error,norm; 
   sprintf(filename,"%s/error%i.dat",doc_info.directory().c_str(),
           doc_info.number());
-  some_file.open(filename);
+  some_file.open(filename); 
   Bulk_mesh_pt->compute_error(some_file,
                               Global_Physical_Variables::u_exact,
                               error,norm);
@@ -1428,8 +1425,14 @@ void StepProblem<ELEMENT>::check_residual_for_exact_non_singular_fe_soln
     Vector<double> x(2);
     x[0]=nod_pt->x(0);
     x[1]=nod_pt->x(1);
-    double u=Global_Physical_Variables::u_non_singular(x); // hierher break deliberately...
-    nod_pt->set_value(0,u);
+
+    Vector<double> u(3);
+    Global_Physical_Variables::u_non_singular(x, u); // hierher break deliberately...
+
+    for(unsigned i=0; i<2; i++)
+    {
+      nod_pt->set_value(i, u[i]);
+    }
   }
 
   // STAGE 1: Evaluate the integral with exact non-singular part
@@ -1451,7 +1454,7 @@ void StepProblem<ELEMENT>::check_residual_for_exact_non_singular_fe_soln
   }
  
  
-  ScalableSingularityForStokesElement<ELEMENT>* el_pt =
+  ScalableSingularityForNavierStokesElement<ELEMENT>* el_pt =
     dynamic_cast<ScalableSingularityForNavierStokesElement<ELEMENT>*>
     (Singular_fct_element_mesh_pt->element_pt(0));
   

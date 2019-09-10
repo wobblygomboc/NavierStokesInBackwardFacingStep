@@ -700,11 +700,12 @@ namespace oomph
       // get singular pressure
       double p_sing = u_sing[P_index_nst];
 
+      // shorthand
       ELEMENT* bulk_el_pt = dynamic_cast<ELEMENT*>(this->bulk_element_pt());
       
       // get contribution of singular pressure and singular velocity gradients to stress tensor
       DenseMatrix<double> singular_stress(Dim, Dim);
-      singular_stress = (*bulk_el_pt->stress_fct_pt)(dudx_sing, p_sing);
+      singular_stress = (*bulk_el_pt->stress_fct_pt())(dudx_sing, p_sing);
       
       // Get the local bulk coordinates    
       s_bulk = local_coordinate_in_bulk(s);
@@ -728,13 +729,13 @@ namespace oomph
 	for(unsigned j=0; j<Dim; j++)
 	{
 	  // get derivative u_{i,j}
-	  dudx_fe(i,j) = this->interpolated_dudx_nst(s_bulk, i, j);
+	  dudx_fe(i,j) = bulk_el_pt->interpolated_dudx_nst(s_bulk, i, j);
 	}
       }
 
       // get FE part of the stress
       DenseMatrix<double> stress_fe(Dim, Dim);
-      stress_fe = (*bulk_el_pt->stress_fct_pt)(dudx_fe, p_fe);
+      stress_fe = (*bulk_el_pt->stress_fct_pt())(dudx_fe, p_fe);
       
       // QUEHACERES delete
       /* // Get the Gradient of the FE part of the solution */
@@ -744,7 +745,7 @@ namespace oomph
       Vector<double> traction_fe(Dim);
 
       // get traction from bulk element
-      bulk_el_pt->get_traction(s_bulk, traction_fe);
+      bulk_el_pt->get_traction(s_bulk, unit_normal, traction_fe);
 
       // QUEHACERES why?
       // Overwrite with exact version!
@@ -754,13 +755,13 @@ namespace oomph
       // QUEHACERES assuming we're keeping this for the time being,
       // renaming to something more descriptive
       Vector<double> exact_u_non_sing(Dim);
-      Vector<double> exact_traction_non_sing(Dim);
-      DenseMatrix<double> exact_stress_non_sing(Dim);
+      Vector<double> exact_traction_non_sing(Dim, 0.0);
+      DenseMatrix<double> exact_stress_non_sing(Dim, Dim);
 
       // get analytic result for the non-singular part of the solution
       if (Exact_non_singular_fct_pt != 0)
       {
-	Exact_non_singular_fct_pt(x, exact_u_non_sing, exact_traction_non_sing);
+	Exact_non_singular_fct_pt(x, exact_u_non_sing, exact_stress_non_sing);
       }
 
       // ================================================
@@ -781,6 +782,11 @@ namespace oomph
 	}
 	for(unsigned i=0; i<Dim; i++)  
 	{
+	  for(unsigned j=0; j<Dim; j++)
+	  {
+	    exact_traction_non_sing[i] += exact_stress_non_sing(i,j) * unit_normal[j];
+	  }
+	  
 	  // QUEHACERES same question as above
 	  // (although if it's supposed to be zero, might still be worth checking)
 	  outfile << exact_traction_non_sing[i] << " ";
@@ -861,11 +867,6 @@ namespace oomph
       Impose_singular_fct_amplitude(false)
       {
       }
-
-    // @@@@@@@@@@@@@@@@
-    // QUEHACERES empieza acqui 9/8 -> figure out how to get the stress function into this class
-    // @@@@@@@@@@@@@@@@
-    
     
     /// Set pointer to mesh containing the FaceElements (and flush
     /// the previous ones first!)
@@ -1006,7 +1007,7 @@ namespace oomph
       (const Vector<double>& x, Vector<double>& u, DenseMatrix<double>& grad_u);
 
     // function pointer for helper function which computes the stress
-    typedef DenseMatrix<double> (*StressFctPt)(const Vector<double>& du_dx, const double& p);
+    typedef DenseMatrix<double> (*StressFctPt)(const DenseMatrix<double>& du_dx, const double& p);
         
     ExactNonSingularFctPt& exact_non_singular_fct_pt()
     {
@@ -1042,7 +1043,7 @@ namespace oomph
 	}
 
 	// get singular part
-	Navier_stokes_sing_el_pt->singular_fct(x, u_sing);
+	u_sing = Navier_stokes_sing_el_pt->singular_fct(x);
 
 	for(unsigned i=0; i<DIM; i++)
 	{
@@ -1072,8 +1073,8 @@ namespace oomph
       outfile << this->tecplot_zone_string(nplot);
    
       // Loop over plot points
-      unsigned num_plot_points=this->nplot_points(nplot);
-      for (unsigned iplot=0;iplot<num_plot_points;iplot++)
+      unsigned num_plot_points= this->nplot_points(nplot);
+      for (unsigned iplot=0; iplot < num_plot_points; iplot++)
       {
 	// Get local coordinates of plot point
 	this->get_s_plot(iplot,nplot,s);
@@ -1084,27 +1085,41 @@ namespace oomph
 	  x[i]=this->interpolated_x(s,i);
 	  outfile << x[i] << " ";
 	}
-	double u_sing=0.0;
+	
+	// singular part of the solution
+	Vector<double> u_sing(DIM, 0.0);
+	
 	// hierher renable
 	if (Navier_stokes_sing_el_pt != 0) 
 	{ 
-	  u_sing=Navier_stokes_sing_el_pt->singular_fct(x); 
+	  u_sing = Navier_stokes_sing_el_pt->singular_fct(x); 
 	}
 
-	double u_non_sing = 0.0;
+	// regular part of the solution
+	Vector<double> u_non_sing(DIM, 0.0);
 
-	Vector<double> flux(DIM);
+	DenseMatrix<double> dudx(DIM);
 
 	// Overwrite with exact version!
 	if (Exact_non_singular_fct_pt != 0)
 	{
-	  Exact_non_singular_fct_pt(x,u_non_sing,flux);
-	}  
-	// hierher end renable
-	outfile << this->interpolated_u_navier_stokes(s) << " "
-		<< TTaylorHoodElement<DIM>::interpolated_u_navier_stokes(s) << " "
-		<< u_sing << " " << u_non_sing << " "
-		<< std::endl;   
+	  Exact_non_singular_fct_pt(x, u_non_sing, dudx);
+	}
+
+	// QUEHACERES not sure what this is doing, surely these two functions point to the same thing?
+	/* // hierher end renable */
+	/* outfile << this->interpolated_u_navier_stokes(s) << " " */
+	/* 	<< TTaylorHoodElement<DIM>::interpolated_u_navier_stokes(s) << " "; */
+
+	for(unsigned i=0; i<DIM; i++)
+	{
+	  outfile << u_sing[i] << " ";
+	}
+	for(unsigned i=0; i<DIM; i++)
+	{
+	  outfile << u_non_sing[i] << " ";
+	}
+	outfile << std::endl;	
       }
    
       // Write tecplot footer (e.g. FE connectivity lists)
@@ -1323,15 +1338,15 @@ namespace oomph
 
       /// \short Provide nodal values of desired boundary values.
       /// They're imposed by Lagrange multipliers.
-      void set_nodal_boundary_values(const Vector<double>& nodal_boundary_value)
+      void set_nodal_boundary_values(const DenseMatrix<double>& nodal_boundary_value)
       {
 #ifdef PARANOID
-	if (nodal_boundary_value.size() != nnode())
+	if (nodal_boundary_value.nrow() != nnode())
 	{
 	  std::stringstream error;
-	  error << "nodel_boundary_value is a vector of size " 
-		<< nodal_boundary_value.size() 
-		<< " but should have the same size as the number of nodes, "
+	  error << "nodel_boundary_value is a matrix with " 
+		<< nodal_boundary_value.nrow() 
+		<< " rows, but should have the same number of rows as the number of nodes, "
 		<< nnode();
 	  throw OomphLibError(error.str(),
 			      OOMPH_CURRENT_FUNCTION,
@@ -1440,7 +1455,7 @@ namespace oomph
       Vector<unsigned> Lambda_index;
 
       /// Desired boundary values at nodes
-      Vector<double> Nodal_boundary_value;
+      DenseMatrix<double> Nodal_boundary_value;
 
       /// \short Index of external Data that stores the value of the amplitude of
       /// the singular function
@@ -1669,6 +1684,8 @@ namespace oomph
     // version works
     
     // QUEHACERES not sure zero-D fluid mechanics has any meaning?
+    // actually possibly does, 'this' is a face element, so 1 dimension lower than the
+    // dimension of the problem, so maybe re-enable for generality at some point
     
    /*  if (this->dim() == 0) */
 /*     {      */
@@ -1786,7 +1803,7 @@ namespace oomph
 	  for(unsigned i=0; i<Dim; i++)
           {
 	    u_fe[i] += this->nodal_value(l,i)  * psi[l];
-	    u_bc[i] += Nodal_boundary_value[l] * psi[l];
+	    u_bc[i] += Nodal_boundary_value(l,i) * psi[l];
 	  
 	    lambda[i] += this->nodal_value(l, Lambda_index[l]+i) * psi[l];
 	  	  
@@ -1799,12 +1816,9 @@ namespace oomph
 	Vector<double> u_sing_unscaled(Dim, 0.0);
 	
 	if (Navier_stokes_sing_el_pt != 0)
-        {
-	  for(unsigned i=0; i<Dim; i++)
-	  {
-	    u_sing[i]          = Navier_stokes_sing_el_pt->singular_fct(interpolated_x);  
-	    u_sing_unscaled[i] = Navier_stokes_sing_el_pt->unscaled_singular_fct(interpolated_x);
-	  }
+        {	  
+	  u_sing          = Navier_stokes_sing_el_pt->singular_fct(interpolated_x);  
+	  u_sing_unscaled = Navier_stokes_sing_el_pt->unscaled_singular_fct(interpolated_x);	  
         }
        
 	//Now add to the appropriate equations
@@ -2015,29 +2029,31 @@ namespace oomph
 
 	  Vector<double> s_bulk(Dim);	  
 	  s_bulk = local_coordinate_in_bulk(s);
-	  
-	  Vector<double> fe_flux(Dim);
-	  bulk_el_pt->get_traction(s_bulk, fe_flux);     
-     
-	  // Get gradient of singular fct (incl. amplitude)
-	  Vector<double> grad_sing(Dim, 0.0);
-	  
-	  if (Navier_stokes_sing_el_pt != 0)
-	  {
-	    grad_sing = Navier_stokes_sing_el_pt->gradient_of_singular_fct(x);
-	  }
 
-	  // Get actual flux 
-	  double actual_flux = 0.0;
-	  for (unsigned i=0; i<Dim; i++)
-	  {
-	    actual_flux += unit_normal[i] * (fe_flux[i] + grad_sing[i]);
-	  }
+	  // QUEHACERES sort this out
+	  
+	  /* Vector<double> fe_flux(Dim); */
+	  /* bulk_el_pt->get_traction(s_bulk, fe_flux);      */
      
-	  double imposed_flux=0.0;
-	  get_traction(x, imposed_flux);
-	  outfile << imposed_flux << " " 
-		  << actual_flux << std::endl;   
+	  /* // Get gradient of singular fct (incl. amplitude) */
+	  /* DenseMatrix<double> dudx_sing(Dim, Dim); */
+	  
+	  /* if (Navier_stokes_sing_el_pt != 0) */
+	  /* { */
+	  /*   dudx_sing = Navier_stokes_sing_el_pt->gradient_of_singular_fct(x); */
+	  /* } */
+ 
+	  /* // Get actual traction  */
+	  /* Vector<double> actual_traction = 0.0; */
+	  /* for (unsigned i=0; i<Dim; i++) */
+	  /* { */
+	  /*   actual_flux += unit_normal[i] * (fe_flux[i] + dudx_sing[i]); */
+	  /* } */
+     
+	  /* double imposed_flux=0.0; */
+	  /* get_traction(x, imposed_flux); */
+	  /* outfile << imposed_flux << " "  */
+	  /* 	  << actual_flux << std::endl;    */
 	}
    
 	// Write tecplot footer (e.g. FE connectivity lists)
@@ -2130,7 +2146,7 @@ namespace oomph
 	//If the function pointer is zero return zero
 	if(Traction_fct_pt == 0)
 	{
-	  traction = new Vector<double>(Dim, 0.0);
+	  traction = *(new Vector<double>(Dim, 0.0));
 	}
 	//Otherwise call the function
 	else
@@ -2208,7 +2224,7 @@ namespace oomph
     Navier_stokes_sing_el_pt = 0;
 
     // set the bulk element pointer
-    Bulk_elem_pt = bulk_el_pt;
+    Bulk_elem_pt = dynamic_cast<ELEMENT*>(bulk_el_pt);
     
     // Let the bulk element build the FaceElement, i.e. setup the pointers 
     // to its nodes (by referring to the appropriate nodes in the bulk
@@ -2424,30 +2440,33 @@ namespace oomph
       }
    
       // Get gradient of singular fct (incl. amplitude)
-      DenseMatrix<double> dudx_sing(Dim, Dim);
-      if (Navier_stokes_sing_el_pt!=0)
-      {
-	dudx_sing = Navier_stokes_sing_el_pt->gradient_of_singular_fct(interpolated_x);
-      }
+      DenseMatrix<double> dudx_sing(Dim, Dim, 0.0);
 
       // Get the values of the singular functions at our current location
-      Vector<double> u_sing(Dim+1);
-      u_sing = Navier_stokes_sing_el_pt->singular_fct(interpolated_x);
+      Vector<double> u_sing(Dim+1, 0.0);
       
+      if (Navier_stokes_sing_el_pt != 0)
+      {
+	dudx_sing = Navier_stokes_sing_el_pt->gradient_of_singular_fct(interpolated_x);
+	u_sing = Navier_stokes_sing_el_pt->singular_fct(interpolated_x);      
+      }
+
       // get singular pressure
       double p_sing = u_sing[P_index_nst];
-      
+	
       // Compute outer unit normal at the specified local coordinate
       Vector<double> unit_normal(Dim);
       outer_unit_normal(s, unit_normal);
 
-      // get a pointer to the bulk element we're attached to
-      ELEMENT* bulk_elem_pt = dynamic_cast<ELEMENT*>(bulk_elem_pt());
-
-      // stress associated with the singular fct
-      DenseMatrix<double> stress_sing(Dim, Dim);
-      stress_sing = (*bulk_elem_pt->stress_fct_pt)(dudx_sing, p_sing);
+      ELEMENT* bulk_elem_pt = dynamic_cast<ELEMENT*>(this->bulk_element_pt());
       
+      // stress associated with the singular fct
+      DenseMatrix<double> stress_sing(Dim, Dim, 0.0);
+
+      if (Navier_stokes_sing_el_pt != 0)
+      {
+	stress_sing = (*bulk_elem_pt->stress_fct_pt())(dudx_sing, p_sing);
+      }
       // Get traction associated with singular fct
       Vector<double> traction_sing(Dim, 0.0);
 
