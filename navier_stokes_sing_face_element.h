@@ -98,18 +98,19 @@ namespace oomph
     ///Compute scaled version of singular function
     Vector<double> singular_fct(const Vector<double>& x) const
     {
-      // get dimension of the problem
-      const unsigned DIM = x.size();
+      // get dimension of the problem, plus one because we want pressure as
+      // well as the velocity components
+      const unsigned Dim = x.size() + 1;
 
       // storage for the scaled basis functions
-      Vector<double> scaled_singular_fct(DIM, 0.0);
+      Vector<double> scaled_singular_fct(Dim, 0.0);
 
       // get the unscaled functions
-      Vector<double> unscaled_u_sing(DIM);
+      Vector<double> unscaled_u_sing(Dim);
       unscaled_u_sing = unscaled_singular_fct(x);
 
       // scale 'em
-      for(unsigned i=0; i<DIM; i++)
+      for(unsigned i=0; i<Dim; i++)
       {
 	scaled_singular_fct[i] = amplitude_of_singular_fct() * unscaled_u_sing[i];
       }
@@ -2335,7 +2336,7 @@ namespace oomph
 	NavierStokesEquations<3>* eqn_pt = 
 	  dynamic_cast<NavierStokesEquations<3>*>(bulk_el_pt);
 	//If the cast has failed die
-	if(eqn_pt==0)
+	if(eqn_pt == 0)
 	{
 	  std::string error_string =
 	    "Bulk element must inherit from NavierStokesEquations.";
@@ -2347,8 +2348,7 @@ namespace oomph
        
 	  throw OomphLibError(error_string,
 			      OOMPH_CURRENT_FUNCTION,
-			      OOMPH_EXCEPTION_LOCATION);
-       
+			      OOMPH_EXCEPTION_LOCATION);       
 	}
 	else
 	{

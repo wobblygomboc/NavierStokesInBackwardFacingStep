@@ -61,7 +61,7 @@ int delta(unsigned i, unsigned j)
 namespace Global_Physical_Variables
 {
   // dimensionality of the problem
-  const unsigned DIM = 2;
+  const unsigned Dim = 2;
   
   // Constant term in singular fct
   double Constant_on_singular_boundary = 0.0;
@@ -74,7 +74,7 @@ namespace Global_Physical_Variables
   // Default uniform element area
   double Uniform_element_area = 0.1;
 
-  // If true: Traction bc on boundaries 0-3; pin on boundaries 4-6
+  // If true: Traction bc on outflow boundary
   bool Do_traction_problem = true;
 
   // Default rescaling factor for domain
@@ -96,8 +96,21 @@ namespace Global_Physical_Variables
   double H_down = 2.0; 
 
   /// Radius of internal boundary (surrounding the singularity)
-  double Radius_of_internal_boundary=0.5;
+  double Radius_of_internal_boundary = 0.5;
 
+  // IDs for the boundaries
+  enum
+  {
+    Inflow_boundary_id          = 0,
+    Top_boundary_id             = 1,
+    Outflow_boundary_id         = 2,
+    Bottom_boundary_id          = 3,
+    Vertical_step_boundary_id   = 4,
+    Corner_boundary_id          = 5,
+    Horizontal_step_boundary_id = 6,
+    Enriched_region_boundary_id = 7    
+  };
+  
   // hierher kill
   // /// Test for assigning C directly
   // double Imposed_amplitude = 0.0;
@@ -279,81 +292,80 @@ namespace Global_Physical_Variables
     u_and_gradient_non_singular(x, u, dudx);
   }
 
-  // QUEHACERES update this
-  /// Flux
-  void prescribed_traction(const Vector<double>& x, 
-			   Vector<double>& traction)
+  void prescribed_traction(const Vector<double>& x, Vector<double>& traction)
   {
-
-    // QUEHACERES sort this all out, get rid of references to flux, check dimensions
-    // ici fix this!
-
     double tol=1.0e-6;
     Vector<double> normal(2);
 
     // rightmost boundary
-    if(fabs(x[0]-2.0-2.0*Scaling_factor_for_domain)<
-       Scaling_factor_for_domain*tol)
+    if(fabs(x[0]-2.0-2.0*Scaling_factor_for_domain) < Scaling_factor_for_domain*tol)
     {
-      normal[0]=1.0;
-      normal[1]=0.0;
+      normal[0] = 1.0;
+      normal[1] = 0.0;
     }
 
     // Vertical boundary below the step
     if(fabs(x[0]-2.0)<Scaling_factor_for_domain*tol)
     {
-      normal[0]=-1.0;
-      normal[1]=0.0;
+      normal[0] = -1.0;
+      normal[1] =  0.0;
     }
 
 
     // 
-    if(fabs(x[0]-2.0*(1.0-Scaling_factor_for_domain))<Scaling_factor_for_domain*tol)
+    if(fabs(x[0]-2.0*(1.0-Scaling_factor_for_domain)) < Scaling_factor_for_domain*tol)
     {
-      normal[0]=-1.0;
-      normal[1]=0.0;
+      normal[0] = -1.0;
+      normal[1] =  0.0;
     }
 
-    if(fabs(x[1]-1.0*Scaling_factor_for_domain)<Scaling_factor_for_domain*tol)
+    if(fabs(x[1]-1.0*Scaling_factor_for_domain) < Scaling_factor_for_domain*tol)
     {
-      normal[0]=0.0;
-      normal[1]=1.0;
+      normal[0] = 0.0;
+      normal[1] = 1.0;
     }
 
-    if(fabs(x[1])<Scaling_factor_for_domain*tol)
+    if(fabs(x[1]) < Scaling_factor_for_domain*tol)
     {
-      normal[0]=0.0;
-      normal[1]=-1.0;
+      normal[0] =  0.0;
+      normal[1] = -1.0;
     }
 
-    if(fabs(x[1]+1.0*Scaling_factor_for_domain)<Scaling_factor_for_domain*tol)
+    if(fabs(x[1]+1.0*Scaling_factor_for_domain) < Scaling_factor_for_domain*tol)
     {
-      normal[0]=0.0;
-      normal[1]=-1.0;
+      normal[0] =  0.0;
+      normal[1] = -1.0;
     }
 
+    // make sure we've got enough storage
+    traction.resize(Dim);
+    
+    // enforce parallel outflow with parabolic profile
+    traction[0] = 0;
+    traction[1] = x[1];
+    
     // regular and singular parts of the solution        
     Vector<double> u_reg;
     u_non_singular(x, u_reg);
     
     Vector<double> u_sing = singular_fct(x);
 
-    // // reset flux
-    // flux = 0;
-    
-    // // flux is u.n
-    // for(unsigned i=0; i<2; i++)
-    // {      
-    //   flux += normal[i] * (u_reg[i] + u_sing[i]);
-    // }
+    // QUEHACERES come back to the reg/sing shizzle above
   }
 
   /// Function to specify boundary conditions
-  Vector<double> u_BC(const Vector<double>& x)
+  Vector<double> u_BC(const Vector<double>& x, const unsigned& boundary_id)
   {
-    Vector<double> u;
-    u_exact(x, u);
+    // no-slip as default
+    Vector<double> u(Dim, 0.0);
 
+    if(boundary_id == Inflow_boundary_id)
+    {
+      // apply parabolic velocity profile to the x-component,
+      // i.e. standard flow profile in a pipe
+      u[0] = x[1]*(H_up - x[1]);      
+    }
+    
     return u;
   }
 
@@ -503,43 +515,42 @@ private:
     {   
       // Flux boundary conditions?
       if (Global_Physical_Variables::Do_traction_problem)
-      {     
-	// Flux boundariies
-	for(unsigned i_bound = 0; i_bound<4; i_bound++)
+      {
+	// QUEHACERES we're only doing the outflow as a traction boundary now
+	unsigned i_bound = Global_Physical_Variables::Outflow_boundary_id;
+	
+	// // Flux boundaries
+	// for(unsigned i_bound = 0; i_bound<4; i_bound++)
 	{
 	  unsigned n_element = Bulk_mesh_pt->nboundary_element(i_bound);
 	  for(unsigned e=0; e<n_element; e++)
 	  {
 	    //Create Pointer to bulk element adjacent to the boundary
 	    ELEMENT* bulk_elem_pt = dynamic_cast<ELEMENT*>
-	      (Bulk_mesh_pt->boundary_element_pt(i_bound,e));
+	      (Bulk_mesh_pt->boundary_element_pt(i_bound, e));
          
 	    //Get Face index of boundary in the bulk element
 	    int face_index = Bulk_mesh_pt->face_index_at_boundary(i_bound,e);
          
 	    //Create corresponding face element
-	    NavierStokesWithSingularityTractionElement<ELEMENT>* 
-	      traction_element_pt =
+	    NavierStokesWithSingularityTractionElement<ELEMENT>* traction_element_pt =
 	      new NavierStokesWithSingularityTractionElement<ELEMENT>(
-		bulk_elem_pt,face_index);
+		bulk_elem_pt, face_index);
          
 	    // Set the pointer to the prescribed flux function
 	    traction_element_pt->traction_fct_pt() = 
 	      &Global_Physical_Variables::prescribed_traction;
          
-	    if (!CommandLineArgs::command_line_flag_has_been_set
-		("--dont_use_singularity"))
+	    if (!CommandLineArgs::command_line_flag_has_been_set("--dont_use_singularity"))
 	    {
 	      // We pass the pointer of singular function element to the 
 	      // face element (Set function because it also declares 
-	      // the amplitude to be
-	      // external data for that element).
+	      // the amplitude to be external data for that element).
 	      traction_element_pt->set_navier_stokes_sing_el_pt(
 		dynamic_cast<ScalableSingularityForNavierStokesElement<ELEMENT>*>(
 		  Singular_fct_element_mesh_pt->element_pt(0)));
 	    }
-
-
+	    
 	    //Attach it to the mesh
 	    Traction_boundary_condition_mesh_pt->add_element_pt(traction_element_pt);
 	  }
@@ -737,7 +748,11 @@ private:
 
   /// \short Enumeration for IDs of FaceElements (used to figure out
   /// who's added what additional nodal data...)
-  enum{Flux_jump_el_id,BC_el_id};
+  enum
+  {
+    Flux_jump_el_id,
+    BC_el_id
+  };
  
 }; // end_of_problem_class
 
@@ -814,15 +829,13 @@ StepProblem<ELEMENT>::StepProblem()
     // Create face elements for flux jump
     //-----------------------------------
     // hierher Face_mesh_for_flux_jump_pt=new Mesh;
-    
-
   }
   
   // Create face elements for imposition of BC
-  Face_mesh_for_bc_pt=new Mesh;
+  Face_mesh_for_bc_pt = new Mesh;
   
   // Traction boundary condition 
-  Traction_boundary_condition_mesh_pt=new Mesh;
+  Traction_boundary_condition_mesh_pt = new Mesh;
 
   // Build the face elements
   create_face_elements();
@@ -831,14 +844,11 @@ StepProblem<ELEMENT>::StepProblem()
   add_sub_mesh(Face_mesh_for_bc_pt);
   add_sub_mesh(Traction_boundary_condition_mesh_pt);
 
-
-  if (!CommandLineArgs::command_line_flag_has_been_set
-      ("--dont_use_singularity"))
+  if (!CommandLineArgs::command_line_flag_has_been_set("--dont_use_singularity"))
   {
     // hierher add_sub_mesh(Face_mesh_for_flux_jump_pt);
-
     
-    // hierher currently not needed because the contributiions from these elements are accumulated in
+    // hierher currently not needed because the contributions from these elements are accumulated in
     // Singular_fct_element_mesh_pt but will need to add this back in 
     // when we optimise the code
     // add_sub_mesh(Face_mesh_for_singularity_integral_pt); 
@@ -879,12 +889,9 @@ StepProblem<ELEMENT>::StepProblem()
 //========================================================================
 template<class ELEMENT>
 void StepProblem<ELEMENT>::complete_problem_setup()
-{
- 
-  if (!CommandLineArgs::command_line_flag_has_been_set
-      ("--dont_use_singularity"))
-  {
-   
+{ 
+  if (!CommandLineArgs::command_line_flag_has_been_set("--dont_use_singularity"))
+  {   
     // Loop over the elements to set up element-specific
     // things that cannot be handled by constructor
     unsigned n_el=Bulk_mesh_pt->nelement();
@@ -905,7 +912,6 @@ void StepProblem<ELEMENT>::complete_problem_setup()
 	&Global_Physical_Variables::u_and_gradient_non_singular;
     }
    
-
     // hierher move this to create_face_elements as for the others
     // Flux jump elements
     // unsigned n_element = Face_mesh_for_flux_jump_pt->nelement();
@@ -921,8 +927,6 @@ void StepProblem<ELEMENT>::complete_problem_setup()
     //    dynamic_cast<ScalableSingularityForNavierStokesElement<ELEMENT>*>(
     //     Singular_fct_element_mesh_pt->element_pt(0)));
     //  }
-  
-
 
     //BC elements
     unsigned n_element = Face_mesh_for_bc_pt->nelement();
@@ -938,8 +942,6 @@ void StepProblem<ELEMENT>::complete_problem_setup()
 	dynamic_cast<ScalableSingularityForNavierStokesElement<ELEMENT>*>(
 	  Singular_fct_element_mesh_pt->element_pt(0)));
     }
-
-
   }
  
   // Apply bcs
@@ -953,7 +955,8 @@ void StepProblem<ELEMENT>::complete_problem_setup()
 template<class ELEMENT>
 void StepProblem<ELEMENT>::apply_boundary_conditions()
 {
-  // QUEHACERES check this for hangovers
+  // shorthand
+  const unsigned Dim = Global_Physical_Variables::Dim;
   
   //---------------------------------------------------------------
   // DEFAULT SETUP FOR STANDARD NAVIER-STOKES PROBLEM WITHOUT LAGRANGE
@@ -971,15 +974,18 @@ void StepProblem<ELEMENT>::apply_boundary_conditions()
     // Flux problem
     if (Global_Physical_Variables::Do_traction_problem)
     {
-      if ((ibound == 4) || (ibound == 5) || (ibound == 6))
+      if ( (ibound != Global_Physical_Variables::Outflow_boundary_id) &&
+	   (ibound != Global_Physical_Variables::Enriched_region_boundary_id))
       {
-	pin_it=true;
+	pin_it = true;
       }
     }
+    // QUEHACERES probably remove this case, will be numerical non-convergence if we apply
+    // Dirichlet conditions everywhere
     // Otherwise pin everywhere but leave internal boundary alone
     else
     {
-      if (ibound != 7) 
+      if (ibound != Global_Physical_Variables::Enriched_region_boundary_id) 
       {
 	pin_it = true;
       }
@@ -991,39 +997,41 @@ void StepProblem<ELEMENT>::apply_boundary_conditions()
 	pin_it = false;
       }
     }
+    
     // Pin it?
     if (pin_it)
     { 
       unsigned num_nod = Bulk_mesh_pt->nboundary_node(ibound);
       for (unsigned inod=0; inod<num_nod; inod++)
       {
-	Bulk_mesh_pt->boundary_node_pt(ibound, inod)->pin(0);
+	// pin both components of the velocity
+	for(unsigned i=0; i<Dim; i++)
+	{
+	  Bulk_mesh_pt->boundary_node_pt(ibound, inod)->pin(i);
+	}
       }
     }
   } // end loop over boundaries
-
-  // shorthand
-  const unsigned DIM = Global_Physical_Variables::DIM;
   
   // Now set boundary values
   for (unsigned ibound=0; ibound<num_bound; ibound++)
-  {
-    // QUEHACERES change this magic number
+  {    
     // Leave internal boundary alone
-    if (ibound != 7)
+    if (ibound != Global_Physical_Variables::Enriched_region_boundary_id)
     {
       unsigned num_nod = Bulk_mesh_pt->nboundary_node(ibound);
       for (unsigned inod=0; inod<num_nod; inod++)
       {
 	Node* nod_pt = Bulk_mesh_pt->boundary_node_pt(ibound, inod);
+	
 	Vector<double> x(2);
 	x[0] = nod_pt->x(0);
 	x[1] = nod_pt->x(1);
 
-	Vector<double> u(DIM);
-	u = Global_Physical_Variables::u_BC(x);
+	Vector<double> u(Dim);
+	u = Global_Physical_Variables::u_BC(x, ibound);
 
-	for(unsigned i=0; i<DIM; i++)
+	for(unsigned i=0; i<Dim; i++)
 	{
 	  nod_pt->set_value(i, u[i]);
 	}
@@ -1040,7 +1048,7 @@ void StepProblem<ELEMENT>::apply_boundary_conditions()
     // Now unpin nodal values where the bc conditions are enforceed
     // by Lagrange multipliers to ensure that the sum of FE and singular
     // solution is correct
-    unsigned nel=Face_mesh_for_bc_pt->nelement();
+    unsigned nel = Face_mesh_for_bc_pt->nelement();
     for (unsigned e=0; e<nel; e++)
     {
       // Get element
@@ -1052,12 +1060,12 @@ void StepProblem<ELEMENT>::apply_boundary_conditions()
       unsigned nnod = el_pt->nnode();
 
       // matrix to store velocities at each boundary node
-      DenseMatrix<double> nodal_boundary_value(nnod, DIM);
+      DenseMatrix<double> nodal_boundary_value(nnod, Dim);
 
       // Unpin the FE part of the solution
       for (unsigned j=0; j<nnod; j++)
       {
-	for(unsigned i=0; i<DIM; i++)
+	for(unsigned i=0; i<Dim; i++)
 	{
 	  el_pt->unpin_u_fe_at_specified_local_node(j, i);
 	}
@@ -1081,7 +1089,7 @@ void StepProblem<ELEMENT>::apply_boundary_conditions()
 		     << "flux jump comes back in...\n";
 	  abort();
 
-	  for(unsigned i=0; i<DIM; i++)
+	  for(unsigned i=0; i<Dim; i++)
 	  {
 	    el_pt->pin_lagrange_multiplier_at_specified_local_node(j, i);
 	  }
@@ -1093,12 +1101,21 @@ void StepProblem<ELEMENT>::apply_boundary_conditions()
 	x[0] = nod_pt->x(0);
 	x[1] = nod_pt->x(1);
 
+	// find the boundaries this node is on
+	std::set<unsigned>* boundaries_set;
+	el_pt->node_pt(j)->get_boundaries_pt(boundaries_set);
+
+	// assuming BCs are continuous so doesn't matter if node is on multiple
+	// boundaries, just take the first
+	std::set<unsigned>::iterator boundaries_iter = (*boundaries_set).begin();
+	unsigned first_boundary = *boundaries_iter;
+	
 	// get velocity from boundary conditions at this point
-	Vector<double> u(DIM);
-	u = Global_Physical_Variables::u_BC(x);
+	Vector<double> u(Dim);
+	u = Global_Physical_Variables::u_BC(x, first_boundary);
 	
 	// assign to the matrix of nodal values
-	for(unsigned i=0; i<DIM; i++)
+	for(unsigned i=0; i<Dim; i++)
 	{
 	  nodal_boundary_value(j,i) = u[i];
 	}
@@ -1680,8 +1697,6 @@ int main(int argc, char **argv)
     "--constant_in_singular_solution",
     &Global_Physical_Variables::Constant_on_singular_boundary);
 
-
-
   // // Max. number of adaptations in code
   // unsigned max_adapt = 0;
   // CommandLineArgs::specify_command_line_flag(
@@ -1710,7 +1725,7 @@ int main(int argc, char **argv)
   doc_info.set_directory("RESLT");
  
   // Step number
-  doc_info.number()=0;
+  doc_info.number() = 0;
  
   // Build the problem with 
   StepProblem<ProjectableTaylorHoodElement<MyTNavierStokesElement<2,3> > > problem;
@@ -1725,8 +1740,8 @@ int main(int argc, char **argv)
   {
     
     // Sorry this is a mess!
-    if ((Global_Physical_Variables::Problem_type_for_check_condition_number==1)
-	&&(!CommandLineArgs::command_line_flag_has_been_set
+    if ((Global_Physical_Variables::Problem_type_for_check_condition_number == 1)
+	&& (!CommandLineArgs::command_line_flag_has_been_set
 	   ("--dont_use_singularity")))
     {
       oomph_info << "Please specify --dont_use_singularity\n";
