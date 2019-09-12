@@ -967,8 +967,7 @@ namespace oomph
       /*             << std::endl; */
     }
 
-  private:
-  
+  private:  
   
     /// Pointer to bulk element where FE solution is regularised
     BULK_ELEMENT* Bulk_element_pt;
@@ -1027,45 +1026,69 @@ namespace oomph
 
     /// \short Return FE representation of function value u_navier_stokes(s) 
     /// plus scaled singular fct (if provided) at local coordinate s
-    inline double interpolated_u_navier_stokes(const Vector<double> &s) const
+    inline Vector<double> interpolated_u_total_navier_stokes(const Vector<double> &s) const
     {
+      // FE part of the solution
       Vector<double> u_fe(DIM);
-      Vector<double> u_sing(DIM);
       
+      // get the interpolated FE velocities
       TTaylorHoodElement<DIM>::interpolated_u_nst(s, u_fe);
 
-      // hierher renable
+      // get the interpolated FE pressure
+      double p = TTaylorHoodElement<DIM>::interpolated_p_nst(s);
+
+      // add pressure to the solution vector
+      u_fe.push_back(p);
+
+      // check if we're subtracting the singularity or not
       if (Navier_stokes_sing_el_pt != 0)
-      {      
-	Vector<double> x(DIM); 
+      {
+	// singular part of the solution
+	Vector<double> u_sing(DIM);
+
+	// interpolate the position
+	Vector<double> x(DIM);
+	
 	for(unsigned i=0; i<DIM; i++)  
 	{ 
 	  x[i] = this->interpolated_x(s,i); 
 	}
-
+	
 	// get singular part
 	u_sing = Navier_stokes_sing_el_pt->singular_fct(x);
 
-	for(unsigned i=0; i<DIM; i++)
+	// add singular part of the solution to the FE part to give the total
+	// computed solution
+	for(unsigned i=0; i<DIM+1; i++)
 	{
 	  u_fe[i] += u_sing[i];
 	}
-      } 
-      // hierher end renable
-   
+      }
+      
       return u_fe;
     } 
 
     /// \short Return FE representation of function value u_fe
-    inline double raw_interpolated_u_navier_stokes(const Vector<double> &s) const
+    inline Vector<double> interpolated_u_fe_navier_stokes(const Vector<double>& s) const
     {
-      double u_fe = TTaylorHoodElement<DIM>::interpolated_u_navier_stokes(s);
+      // FE solution vector
+      Vector<double> u_fe(DIM);
+
+      // get FE velocity
+      TTaylorHoodElement<DIM>::interpolated_u_nst(s, u_fe);
+
+      // get FE pressure
+      double p_fe = TTaylorHoodElement<DIM>::interpolated_p_nst(s);
+
+      // add pressure to the solution vector
+      u_fe.push_back(p_fe);
+      
       return u_fe;
     } 
 
     /// Output with various contributions
-    void  output_with_various_contributions(std::ostream &outfile, 
-					    const unsigned &nplot)
+    void  output_with_various_contributions(std::ostream& outfile, 
+					    const unsigned& nplot)
     {
       //Vector of local coordinates
       Vector<double> s(DIM);
@@ -1074,11 +1097,11 @@ namespace oomph
       outfile << this->tecplot_zone_string(nplot);
    
       // Loop over plot points
-      unsigned num_plot_points= this->nplot_points(nplot);
+      unsigned num_plot_points = this->nplot_points(nplot);
       for (unsigned iplot=0; iplot < num_plot_points; iplot++)
       {
 	// Get local coordinates of plot point
-	this->get_s_plot(iplot,nplot,s);
+	this->get_s_plot(iplot, nplot, s);
      
 	Vector<double> x(DIM);
 	for(unsigned i=0; i<DIM; i++) 
@@ -1088,7 +1111,7 @@ namespace oomph
 	}
 	
 	// singular part of the solution
-	Vector<double> u_sing(DIM, 0.0);
+	Vector<double> u_sing(DIM+1, 0.0);
 	
 	// hierher renable
 	if (Navier_stokes_sing_el_pt != 0) 
@@ -1097,37 +1120,51 @@ namespace oomph
 	}
 
 	// regular part of the solution
-	Vector<double> u_non_sing(DIM, 0.0);
+	Vector<double> u_exact_non_sing(DIM+1, 0.0);
 
-	DenseMatrix<double> dudx(DIM);
+	DenseMatrix<double> dudx(DIM, DIM);
 
 	// Overwrite with exact version!
 	if (Exact_non_singular_fct_pt != 0)
 	{
-	  Exact_non_singular_fct_pt(x, u_non_sing, dudx);
+	  Exact_non_singular_fct_pt(x, u_exact_non_sing, dudx);
 	}
 
-	// QUEHACERES not sure what this is doing, surely these two functions point to the same thing?
-	/* // hierher end renable */
-	/* outfile << this->interpolated_u_navier_stokes(s) << " " */
-	/* 	<< TTaylorHoodElement<DIM>::interpolated_u_navier_stokes(s) << " "; */
+	// get the regular FE solution, and the full computed solution u = u_FE + u_sing
+	Vector<double> u_fe(DIM+1, 0.0);
+	Vector<double> u_fe_plus_sing(DIM+1, 0.0);
 
-	for(unsigned i=0; i<DIM; i++)
+	u_fe           = this->interpolated_u_fe_navier_stokes(s);
+	u_fe_plus_sing = this->interpolated_u_total_navier_stokes(s);
+
+	// output the total solution
+	for(unsigned i=0; i<DIM+1; i++)
+	{
+	  outfile << u_fe_plus_sing[i] << " ";
+	}	
+	// output the FE bit
+	for(unsigned i=0; i<DIM+1; i++)
+	{
+	  outfile << u_fe[i] << " ";
+	}
+
+	// output the singular bit
+	for(unsigned i=0; i<DIM+1; i++)
 	{
 	  outfile << u_sing[i] << " ";
 	}
+	// output the exact regular bit
 	for(unsigned i=0; i<DIM; i++)
 	{
-	  outfile << u_non_sing[i] << " ";
+	  outfile << u_exact_non_sing[i] << " ";
 	}
 	outfile << std::endl;	
       }
-   
+      outfile << std::endl;
+      
       // Write tecplot footer (e.g. FE connectivity lists)
-      this->write_tecplot_zone_footer(outfile,nplot);
-   
+      this->write_tecplot_zone_footer(outfile, nplot);   
     }
-
  
     /// Pointer to element that stores singular fct 
     TemplateFreeScalableSingularityForNavierStokesElement*& navier_stokes_sing_el_pt() 

@@ -46,14 +46,7 @@
 #include "power_method.h"
 
 using namespace std;
-
 using namespace oomph;
-
-// Kronecker delta function
-int delta(unsigned i, unsigned j)
-{
-  return (i == j);
-}
 
 //==start_of_namespace==============================
 /// Namespace for physical parameters
@@ -118,6 +111,19 @@ namespace Global_Physical_Variables
   // Bit of a hack but it facilitates reuse...
 #include "unstructured_backward_step_mesh.h"
 
+  // Kronecker delta function
+  int delta(unsigned i, unsigned j)
+  {
+    return (i == j);
+  }
+
+  // sign function
+  template <typename T>
+  int sgn(T val)
+  {
+    return (T(0) < val) - (val < T(0));
+  }
+  
   /// \short Newtonian stress tensor
   DenseMatrix<double> get_stress(const DenseMatrix<double>& du_dx,
 				 const double& p)
@@ -144,9 +150,16 @@ namespace Global_Physical_Variables
   void singular_fct_and_gradient(const Vector<double>& x,
 				 Vector<double>& u, DenseMatrix<double>& du_dx)
   {
-    // Radius & polar angle
-    double r=sqrt((x[0]-L_up)*(x[0]-L_up)+x[1]*x[1]);
+    // big number to numerically represent infinity
+    const double infinity = 10.0 * sqrt(2.0 * Uniform_element_area);
 
+    // Radius & polar angle, accounting for the fact the singularity is not at the
+    // origin but at (L_up, 0)
+    double r = sqrt( (x[0]-L_up) * (x[0]-L_up) + x[1]*x[1] );
+
+    // make sure we've got enough storage
+    u.resize(3);
+            
     // Little hack to make sure atan2 doesn't overshoot
     double y=x[1];
     double tol_y=-1.0e-12;
@@ -160,7 +173,7 @@ namespace Global_Physical_Variables
     double lambda = 1.544483736782746;
 
     // polar components in r and phi directions
-    double ur=0, v=0;
+    double ur = 0, v = 0;
 
     // ------------------------------------------------------------------
     // components in polar coordinates
@@ -185,9 +198,6 @@ namespace Global_Physical_Variables
 
     double dvdphi = pow(r,-1 + lambda)*lambda*(-((-2 + lambda)*cos(alpha*lambda)*sin(phi*(-2 + lambda))) + 
 					       lambda*cos(alpha*(-2 + lambda))*sin(phi*lambda));
-
-    // make sure we've got enough storage
-    u.resize(3);
     
     // Cartesian components (in polar coords, i.e. ux(r,phi) and uy(r,phi) )
     u[0] = ur * cos(phi) - 1.0/r * v * sin(phi);
@@ -214,6 +224,19 @@ namespace Global_Physical_Variables
 
     // \hat p
     u[2] = 4.0*pow(r,lambda-2.0)*(lambda-1.0)*cos(alpha*lambda)*sin((lambda-2.0)*phi);
+
+    // catch the infinity case - assumed to a proper double number, but keep the signx
+    if (r == 0.0)
+    {
+      u[0] = sgn(u[0]) * infinity;
+      u[1] = sgn(u[1]) * infinity;
+      u[2] = sgn(u[2]) * infinity;
+
+      du_dx(0,0) = sgn(du_dx(0,0)) * infinity;
+      du_dx(0,1) = sgn(du_dx(0,1)) * infinity;
+      du_dx(1,0) = sgn(du_dx(1,0)) * infinity;
+      du_dx(1,1) = sgn(du_dx(1,1)) * infinity;
+    }   
     
     // QUEHACERES
     // Now add constant
@@ -271,8 +294,6 @@ namespace Global_Physical_Variables
     }
   }
 
-  // QUEHACERES dudx ("flux") should be changed to traction
-  // but surely we don't want to return this? 
   /// Non-singular part of the solution for testing
   void u_and_gradient_non_singular(const Vector<double>& x,
 				   Vector<double>& u,
@@ -1146,7 +1167,7 @@ void StepProblem<ELEMENT>::doc_solution(DocInfo& doc_info)
   sprintf(filename,"%s/soln%i.dat",doc_info.directory().c_str(),
 	  doc_info.number());
   some_file.open(filename);
-  Bulk_mesh_pt->output(some_file,npts);
+  Bulk_mesh_pt->output(some_file, npts); // output_paraview
   some_file.close();
 
 
@@ -1155,7 +1176,7 @@ void StepProblem<ELEMENT>::doc_solution(DocInfo& doc_info)
 	  doc_info.number());
   some_file.open(filename);
   npts=2;
-  Bulk_mesh_pt->output(some_file,npts);
+  Bulk_mesh_pt->output(some_file, npts);
   some_file.close();
   
 
@@ -1165,14 +1186,15 @@ void StepProblem<ELEMENT>::doc_solution(DocInfo& doc_info)
   sprintf(filename,"%s/extended_soln%i.dat",doc_info.directory().c_str(),
           doc_info.number());
   some_file.open(filename);
+  
   unsigned nel=Bulk_mesh_pt->nelement();
-  for (unsigned e=0;e<nel;e++)
+  for (unsigned e=0; e<nel; e++)
   {
     npts=10;
-    ELEMENT* el_pt=
-      dynamic_cast<ELEMENT*>(Bulk_mesh_pt->element_pt(e));
-    el_pt->output_with_various_contributions(some_file,npts);
-    av_el_size+=el_pt->size();
+    ELEMENT* el_pt= dynamic_cast<ELEMENT*>(Bulk_mesh_pt->element_pt(e));
+    
+    el_pt->output_with_various_contributions(some_file, npts);
+    av_el_size += el_pt->size();
   }
   some_file.close();
   av_el_size/=double(nel);
@@ -1206,7 +1228,6 @@ void StepProblem<ELEMENT>::doc_solution(DocInfo& doc_info)
                            Global_Physical_Variables::u_exact);
   some_file.close();
 
-
   // Non-singular part of the solution
   sprintf(filename,"%s/non_singular_part_of_soln%i.dat",
           doc_info.directory().c_str(),
@@ -1217,22 +1238,20 @@ void StepProblem<ELEMENT>::doc_solution(DocInfo& doc_info)
                            Global_Physical_Variables::u_non_singular);
   some_file.close();
 
-
-
   if (!CommandLineArgs::command_line_flag_has_been_set
       ("--dont_use_singularity"))
   {
-    // hierher put into one file and flush 
-    // trace file for va lue of C
+    // hierher put into one file and flush trace file for value of C
     sprintf(filename,"%s/suivi_C.dat",doc_info.directory().c_str());
+    
     some_file.open(filename,std::ios::out | std::ios::app);
+    
     some_file << sqrt(av_el_size) <<" " 
               << dynamic_cast<TemplateFreeScalableSingularityForNavierStokesElement*>(
 		Singular_fct_element_mesh_pt->element_pt(0)
 		)->amplitude_of_singular_fct()<<endl;
     some_file.close();
   }
-
 
   // DoubleVector r;
   // CRDoubleMatrix jac;
@@ -1243,8 +1262,6 @@ void StepProblem<ELEMENT>::doc_solution(DocInfo& doc_info)
   // get_jacobian(r,jac);
   // oomph_info << "DONE SETTING UP JAC FOR OUTPUT OF MOST RECENT JAC\n";
   // jac.sparse_indexed_output(some_file);
-
-
 
   // sprintf(filename,"%s/suivi_derivee.dat",doc_info.directory().c_str());
   // some_file.open(filename,std::ios::out | std::ios::app);
@@ -1297,7 +1314,6 @@ void StepProblem<ELEMENT>::doc_solution(DocInfo& doc_info)
       << dynamic_cast<TemplateFreeScalableSingularityForNavierStokesElement*>(
 	Singular_fct_element_mesh_pt->element_pt(0))->
       amplitude_of_singular_fct() << std::endl;
-
 
     // Output face elements used to compute amplitude of singularity
     sprintf(filename,"%s/integrand_elements%i.dat",
