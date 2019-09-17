@@ -150,13 +150,23 @@ namespace Global_Physical_Variables
   void singular_fct_and_gradient(const Vector<double>& x,
 				 Vector<double>& u, DenseMatrix<double>& du_dx)
   {
-    // big number to numerically represent infinity
-    const double infinity = 10.0 * sqrt(2.0 * Uniform_element_area);
+    // QUEHACERES not using, delete
+    // // big number to numerically represent infinity
+    // const double infinity = 10.0 * sqrt(2.0 * Uniform_element_area);
 
     // Radius & polar angle, accounting for the fact the singularity is not at the
     // origin but at (L_up, 0)
     double r = sqrt( (x[0]-L_up) * (x[0]-L_up) + x[1]*x[1] );
 
+    bool at_origin = (r == 0);
+    
+    // catch the singularity point
+    if (at_origin)
+    {
+      // shift the radius to 1/10th of the element lengthscale
+      r = 0.1*sqrt(2.0 * Uniform_element_area);      
+    }   
+    
     // make sure we've got enough storage
     u.resize(3);
             
@@ -164,11 +174,17 @@ namespace Global_Physical_Variables
     double y=x[1];
     double tol_y=-1.0e-12;
     if ((y<0.0)&&(y>tol_y)) y=0.0;
-    double phi=atan2(y,(x[0]-L_up));
+
+    // angle w.r.t. x-axis
+    double theta = atan2(y, (x[0]-L_up));
 
     // half the convex angle of the step
     double alpha = 3.0*MathematicalConstants::Pi/4.0;
 
+    // angle w.r.t. to axis of symmetry between the two walls of the step,
+    // the angle the analytic solution is given in terms of
+    double phi = theta + alpha - MathematicalConstants::Pi;
+    
     // streamfunction exponent, from Mathematica
     double lambda = 1.544483736782746;
 
@@ -187,62 +203,91 @@ namespace Global_Physical_Variables
     // ------------------------------------------------------------------
     // derivatives of polar components w.r.t. polar components
     // ------------------------------------------------------------------
-    double dudr =  pow(r,-2 + lambda)*(-1 + lambda)*((-2 + lambda)*cos(alpha*lambda)*sin(phi*(-2 + lambda)) - 
-						     lambda*cos(alpha*(-2 + lambda))*sin(phi*lambda));
+    double dudr =  pow(r,-2 + lambda)*(-1 + lambda) *
+      ((-2 + lambda)*cos(alpha*lambda)*sin(phi*(-2 + lambda)) - 
+       lambda*cos(alpha*(-2 + lambda))*sin(phi*lambda));
 
-    double dudphi = pow(r,-1 + lambda)*(-(pow(lambda,2)*cos(alpha*(-2 + lambda))*cos(phi*lambda)) + 
-					pow(-2 + lambda,2)*cos(phi*(-2 + lambda))*cos(alpha*lambda));
+    double dudphi = pow(r,-1 + lambda) *
+      (-(pow(lambda,2) * cos(alpha*(-2 + lambda))*cos(phi*lambda)) + 
+       pow(-2 + lambda,2)*cos(phi*(-2 + lambda))*cos(alpha*lambda));
 
-    double dvdr = pow(r,-2 + lambda)*(-1 + lambda)*(-(lambda*cos(alpha*(-2 + lambda))*cos(phi*lambda)) + 
-						    lambda*cos(phi*(-2 + lambda))*cos(alpha*lambda));
+    double dvdr = pow(r,-2 + lambda) *
+      (-1 + lambda)*(-(lambda*cos(alpha*(-2 + lambda))*cos(phi*lambda)) + 
+		     lambda*cos(phi*(-2 + lambda))*cos(alpha*lambda));
 
-    double dvdphi = pow(r,-1 + lambda)*lambda*(-((-2 + lambda)*cos(alpha*lambda)*sin(phi*(-2 + lambda))) + 
-					       lambda*cos(alpha*(-2 + lambda))*sin(phi*lambda));
+    double dvdphi = pow(r,-1 + lambda)*lambda *
+      (-((-2 + lambda)*cos(alpha*lambda)*sin(phi*(-2 + lambda))) + 
+       lambda*cos(alpha*(-2 + lambda))*sin(phi*lambda));
     
-    // Cartesian components (in polar coords, i.e. ux(r,phi) and uy(r,phi) )
-    u[0] = ur * cos(phi) - 1.0/r * v * sin(phi);
-    u[1] = ur * sin(phi) + 1.0/r * v * cos(phi);
+    // Cartesian components (in polar coords, i.e. ux(r,theta) and uy(r,theta) )
+    // note we're now using the angle w.r.t. the x-axis
+    u[0] = ur * cos(theta) - v * sin(theta);
+    u[1] = ur * sin(theta) + v * cos(theta);
 
+    // singular pressure \hat p
+    u[2] = 4.0*pow(r,lambda-2.0)*(lambda-1.0)*cos(alpha*lambda)*sin((lambda-2.0)*phi);
+    
+    // set u to actual zero (rather than value some small radius away) to exactly
+    // match the boundary conditions
+    if(at_origin)
+    {
+      // from BCs
+      u[0] = 0.0;
+      u[1] = 0.0;
+    }
+    
     // ------------------------------------------------------------------
     // derivatives of Cartesian components w.r.t. Cartesian coordinates
-    // ------------------------------------------------------------------  
+    // ------------------------------------------------------------------
+
+    // S is tensor \bm{\grad u} in polar coordinates
+    DenseMatrix<double> S(2,2);
+    S(0,0) = dudr;               // (\bm{\grad u})_{rr}
+    S(0,1) = (1.0/r)*dudphi;     // (\bm{\grad u})_{r\theta}
+    S(1,0) = dvdr;               // (\bm{\grad u})_{\theta r}
+    S(1,1) = (1.0/r)*dvdphi;     // (\bm{\grad u})_{\theta\theta}
+
     // dux_dx
-    du_dx(0,0) = cos(phi) * (dudr*cos(phi) - dvdr*sin(phi))
-      -(1.0/r)*sin(phi) * (dudphi*cos(phi)-ur*sin(phi)-dvdphi*sin(phi) - v*cos(phi));
-  
+    du_dx(0,0) = cos(theta) * ( S(0,0)*cos(theta) - S(0,1)*sin(theta) ) -
+      sin(theta) * ( S(1,0)*cos(theta) - S(1,1)*sin(theta) );
+
     // dux_dy
-    du_dx(0,1) = sin(phi) * (dudr*cos(phi) - dvdr*sin(phi))
-      +(1.0/r)*cos(phi) * (dudphi*cos(phi) - ur*sin(phi) - dvdphi*sin(phi) - v*cos(phi));
+    du_dx(0,1) = cos(theta) * ( S(0,0)*sin(theta) + S(0,1)*cos(theta) ) -
+      sin(theta) * ( S(1,0)*sin(theta) + S(1,1)*cos(theta) );
 
     // duy_dx
-    du_dx(1,0) = cos(phi) * (dudr*sin(phi)+dvdr*cos(phi))
-      -(1.0/r)*sin(phi) * (dudphi*sin(phi) + ur*cos(phi) + dvdphi*cos(phi) - v*sin(phi));
+    du_dx(1,0) = sin(theta) * ( S(0,0)*cos(theta) - S(0,1)*sin(theta) ) +
+      cos(theta) * ( S(1,0)*cos(theta) - S(1,1)*sin(theta) );
 
     // duy_dy
-    du_dx(1,1) = sin(phi) * (dudr*sin(phi)+dvdr*cos(phi))
-      +(1.0/r)*cos(phi) * (dudphi*sin(phi) + ur*cos(phi) + dvdphi*cos(phi) - v*sin(phi));
-
-    // \hat p
-    u[2] = 4.0*pow(r,lambda-2.0)*(lambda-1.0)*cos(alpha*lambda)*sin((lambda-2.0)*phi);
-
-    // catch the infinity case - assumed to a proper double number, but keep the signx
-    if (r == 0.0)
-    {
-      u[0] = sgn(u[0]) * infinity;
-      u[1] = sgn(u[1]) * infinity;
-      u[2] = sgn(u[2]) * infinity;
-
-      du_dx(0,0) = sgn(du_dx(0,0)) * infinity;
-      du_dx(0,1) = sgn(du_dx(0,1)) * infinity;
-      du_dx(1,0) = sgn(du_dx(1,0)) * infinity;
-      du_dx(1,1) = sgn(du_dx(1,1)) * infinity;
-    }   
+    du_dx(1,1) = sin(theta) * ( S(0,0)*sin(theta) + S(0,1)*cos(theta) ) +
+      cos(theta) * ( S(1,0)*sin(theta) + S(1,1)*cos(theta) );
     
-    // QUEHACERES
+    // QUEHACERES not sure these are right, probably delete
+    // // dux_dx
+    // du_dx(0,0) = cos(theta) * (dudr*cos(theta) - dvdr*sin(theta))
+    //   -(1.0/r)*sin(theta) * (dudphi*cos(theta)-ur*sin(theta) -
+    // 			     dvdphi*sin(theta) - v*cos(theta));
+  
+    // // dux_dy
+    // du_dx(0,1) = sin(theta) * (dudr*cos(theta) - dvdr*sin(theta))
+    //   +(1.0/r)*cos(theta) * (dudphi*cos(theta) - ur*sin(theta) -
+    // 			     dvdphi*sin(theta) - v*cos(theta));
+
+    // // duy_dx
+    // du_dx(1,0) = cos(theta) * (dudr*sin(theta) + dvdr*cos(theta))
+    //   -(1.0/r)*sin(theta) * (dudphi*sin(theta) + ur*cos(theta) +
+    // 			     dvdphi*cos(theta) - v*sin(theta));
+
+    // // duy_dy
+    // du_dx(1,1) = sin(theta) * (dudr*sin(theta) + dvdr*cos(theta))
+    //   +(1.0/r)*cos(theta) * (dudphi*sin(theta) + ur*cos(theta) +
+    // 			     dvdphi*cos(theta) - v*sin(theta));
+
+    // QUEHACERES what dis?
     // Now add constant
     // u+=Constant_on_singular_boundary;
   }
-
 
   /// \short "Singular" function
   Vector<double> singular_fct(const Vector<double>& x)
@@ -363,7 +408,8 @@ namespace Global_Physical_Variables
     
     // enforce parallel outflow with parabolic profile
     traction[0] = 0;
-    traction[1] = x[1];
+    traction[1] = x[1] * normal[0]
+      ;
     
     // regular and singular parts of the solution        
     Vector<double> u_reg;
@@ -480,273 +526,280 @@ private:
 
   /// hierher Delete face elements and flush meshes
   void delete_face_elements()
+  {
+    // Loop over the flux elements
+    unsigned n_element = Traction_boundary_condition_mesh_pt->nelement();
+    for(unsigned e=0;e<n_element;e++)
     {
-      // Loop over the flux elements
-      unsigned n_element = Traction_boundary_condition_mesh_pt->nelement();
-      for(unsigned e=0;e<n_element;e++)
-      {
-	// Kill
-	delete Traction_boundary_condition_mesh_pt->element_pt(e);
-      }
-   
-      // Wipe the mesh
-      Traction_boundary_condition_mesh_pt->flush_element_and_node_storage();
-
-      if (CommandLineArgs::command_line_flag_has_been_set
-	  ("--dont_use_singularity"))
-      {
-	return;
-      }
-
-      // hierher
-      // // Loop over the flux jump elements
-      // unsigned n_element = Face_mesh_for_flux_jump_pt->nelement();
-      // for(unsigned e=0;e<n_element;e++)
-      //  {
-      //   delete Face_mesh_for_flux_jump_pt->element_pt(e);
-      //  }
-   
-      // // hierher: actually kill nodes too because they've been duplicated
-
-      // // Wipe the mesh
-      // Face_mesh_for_flux_jump_pt->flush_element_and_node_storage();
-
-      // Loop over the bc elements
-      n_element = Face_mesh_for_bc_pt->nelement();
-      for(unsigned e=0;e<n_element;e++)
-      {
-	// Kill
-	delete Face_mesh_for_bc_pt->element_pt(e);
-      }
-   
-      // Wipe the mesh
-      Face_mesh_for_bc_pt->flush_element_and_node_storage();
-
-      // Loop over the integral face elements
-      n_element = Face_mesh_for_singularity_integral_pt->nelement();
-      for(unsigned e=0;e<n_element;e++)
-      {
-	delete Face_mesh_for_singularity_integral_pt->element_pt(e);
-      }
-      Face_mesh_for_singularity_integral_pt->flush_element_and_node_storage();
+      // Kill
+      delete Traction_boundary_condition_mesh_pt->element_pt(e);
     }
+   
+    // Wipe the mesh
+    Traction_boundary_condition_mesh_pt->flush_element_and_node_storage();
+
+    if (CommandLineArgs::command_line_flag_has_been_set
+	("--dont_subtract_singularity"))
+    {
+      return;
+    }
+
+    // hierher
+    // // Loop over the flux jump elements
+    // unsigned n_element = Face_mesh_for_flux_jump_pt->nelement();
+    // for(unsigned e=0;e<n_element;e++)
+    //  {
+    //   delete Face_mesh_for_flux_jump_pt->element_pt(e);
+    //  }
+   
+    // // hierher: actually kill nodes too because they've been duplicated
+
+    // // Wipe the mesh
+    // Face_mesh_for_flux_jump_pt->flush_element_and_node_storage();
+
+    // Loop over the bc elements
+    n_element = Face_mesh_for_bc_pt->nelement();
+    for(unsigned e=0;e<n_element;e++)
+    {
+      // Kill
+      delete Face_mesh_for_bc_pt->element_pt(e);
+    }
+   
+    // Wipe the mesh
+    Face_mesh_for_bc_pt->flush_element_and_node_storage();
+
+    // Loop over the integral face elements
+    n_element = Face_mesh_for_singularity_integral_pt->nelement();
+    for(unsigned e=0;e<n_element;e++)
+    {
+      delete Face_mesh_for_singularity_integral_pt->element_pt(e);
+    }
+    Face_mesh_for_singularity_integral_pt->flush_element_and_node_storage();
+  }
 
   /// Create face elements
   void create_face_elements()
-    {   
-      // Flux boundary conditions?
-      if (Global_Physical_Variables::Do_traction_problem)
-      {
-	// QUEHACERES we're only doing the outflow as a traction boundary now
-	unsigned i_bound = Global_Physical_Variables::Outflow_boundary_id;
+  {   
+    // Flux boundary conditions?
+    if (Global_Physical_Variables::Do_traction_problem)
+    {
+      // QUEHACERES we're only doing the outflow as a traction boundary now
+      unsigned i_bound = Global_Physical_Variables::Outflow_boundary_id;
 	
-	// // Flux boundaries
-	// for(unsigned i_bound = 0; i_bound<4; i_bound++)
-	{
-	  unsigned n_element = Bulk_mesh_pt->nboundary_element(i_bound);
-	  for(unsigned e=0; e<n_element; e++)
-	  {
-	    //Create Pointer to bulk element adjacent to the boundary
-	    ELEMENT* bulk_elem_pt = dynamic_cast<ELEMENT*>
-	      (Bulk_mesh_pt->boundary_element_pt(i_bound, e));
-         
-	    //Get Face index of boundary in the bulk element
-	    int face_index = Bulk_mesh_pt->face_index_at_boundary(i_bound,e);
-         
-	    //Create corresponding face element
-	    NavierStokesWithSingularityTractionElement<ELEMENT>* traction_element_pt =
-	      new NavierStokesWithSingularityTractionElement<ELEMENT>(
-		bulk_elem_pt, face_index);
-         
-	    // Set the pointer to the prescribed flux function
-	    traction_element_pt->traction_fct_pt() = 
-	      &Global_Physical_Variables::prescribed_traction;
-         
-	    if (!CommandLineArgs::command_line_flag_has_been_set("--dont_use_singularity"))
-	    {
-	      // We pass the pointer of singular function element to the 
-	      // face element (Set function because it also declares 
-	      // the amplitude to be external data for that element).
-	      traction_element_pt->set_navier_stokes_sing_el_pt(
-		dynamic_cast<ScalableSingularityForNavierStokesElement<ELEMENT>*>(
-		  Singular_fct_element_mesh_pt->element_pt(0)));
-	    }
-	    
-	    //Attach it to the mesh
-	    Traction_boundary_condition_mesh_pt->add_element_pt(traction_element_pt);
-	  }
-	}
-      }
-      // Dirichlet boundary conditions
-      else
-      {
-	if (CommandLineArgs::command_line_flag_has_been_set
-	    ("--enforce_dirichlet_bcs_by_lagrange_multipliers"))
-	{
-	  // BC elements live on the whole outer boundary:
-	  {
-	    for(unsigned i_bound = 0;i_bound<7;i_bound++)
-	    {
-	      unsigned n_element = Bulk_mesh_pt->nboundary_element(i_bound);
-          
-	      // Loop over the bulk elements adjacent to boundary b
-	      for(unsigned e=0;e<n_element;e++)
-	      {
-		// Get pointer to the bulk element that is adjacent to boundary b
-		ELEMENT* bulk_elem_pt = dynamic_cast<ELEMENT*>(
-		  Bulk_mesh_pt->boundary_element_pt(i_bound,e));
-		//Find the index of the face of element e along boundary b 
-		int face_index = Bulk_mesh_pt->face_index_at_boundary(i_bound,e);
-            
-		// Build the corresponding bc element
-		NavierStokesWithSingularityBCFaceElement<ELEMENT>* bc_element_pt = new 
-		  NavierStokesWithSingularityBCFaceElement<ELEMENT>
-		  (bulk_elem_pt,face_index,BC_el_id);
-            
-		// Tell the element about the singular fct
-		if (!CommandLineArgs::command_line_flag_has_been_set
-		    ("--dont_use_singularity"))
-		{
-		  bc_element_pt->set_navier_stokes_sing_el_pt(
-		    dynamic_cast<ScalableSingularityForNavierStokesElement<ELEMENT>*>(
-		      Singular_fct_element_mesh_pt->element_pt(0)));
-		}
-            
-		//Add the bc element to the surface mesh
-		Face_mesh_for_bc_pt->add_element_pt(bc_element_pt);
-	      }
-	    }
-	  }
-	}
-      }
-
-
-      if (CommandLineArgs::command_line_flag_has_been_set
-	  ("--dont_use_singularity"))
-      {
-	return;
-      }
-
-      
-      // QUEHACERES need to update if we re-enable
-      // hierher renable
-
-
-      // // Map keeps a running count of duplicate nodes already created;
-      // // existing_duplicate_node_pt[orig_node_pt]=new_node_pt.
-      // std::map<Node*,Node*> existing_duplicate_node_pt;
-
-
-      // Flux jump elements on boundary 7 of region 1:
-      //----------------------------------------------
-      // NOTE: Since these duplicate nodes, these elements must be
-      //----------------------------------------------------------
-      //       constructed first!
-      //       ------------------
-      // {
-      //  // Where are we? Inside region 1 on boundary 7
-      //  unsigned b=7;
-      //  unsigned region_id=1;
-      //  unsigned nel=Bulk_mesh_pt->nboundary_element_in_region(b,region_id);
-      //  for (unsigned e=0;e<nel;e++)
-      //   {
-      //    FiniteElement* el_pt=
-      //     Bulk_mesh_pt->boundary_element_in_region_pt(b,region_id,e);
-      
-      //    // What is the index of the face of the bulk element at the boundary
-      //    int face_index = Bulk_mesh_pt->
-      //     face_index_at_boundary_in_region(b,region_id,e);
-      
-      //    // Build the corresponding flux jump element
-      //    PoissonWithSingularityFluxJumpFaceElement<ELEMENT>* flux_jump_element_pt 
-      //     = new PoissonWithSingularityFluxJumpFaceElement<ELEMENT>
-      //     (el_pt,face_index,existing_duplicate_node_pt,Flux_jump_el_id);
-
-      //    //Add the flux jump element to the mesh
-      //    Face_mesh_for_flux_jump_pt->add_element_pt(flux_jump_element_pt);
-      //   }
-      // }
-   
-      // Now add all new (duplicated) nodes to mesh
-      // for (std::map<Node*,Node*>::iterator it=
-      //       existing_duplicate_node_pt.begin();
-      //      it!=existing_duplicate_node_pt.end();it++)
-      //  {
-      //   Face_mesh_for_flux_jump_pt->add_node_pt((*it).second);
-      //  }
-
-
-      // Create the face elements needed to compute the amplitude of
-      // the singular function,
-   
-      // Only outer boundaries
-      for(unsigned i_bound = 0;i_bound<7;i_bound++)
+      // Traction boundaries
+      // for(unsigned i_bound = 0; i_bound<4; i_bound++)
       {
 	unsigned n_element = Bulk_mesh_pt->nboundary_element(i_bound);
 	for(unsigned e=0; e<n_element; e++)
 	{
 	  //Create Pointer to bulk element adjacent to the boundary
 	  ELEMENT* bulk_elem_pt = dynamic_cast<ELEMENT*>
-	    (Bulk_mesh_pt->boundary_element_pt(i_bound,e));
-       
+	    (Bulk_mesh_pt->boundary_element_pt(i_bound, e));
+         
 	  //Get Face index of boundary in the bulk element
 	  int face_index = Bulk_mesh_pt->face_index_at_boundary(i_bound,e);
-       
+         
 	  //Create corresponding face element
-	  NavierStokesWithSingularityBoundaryIntegralFaceElement<ELEMENT>* 
-	    traction_element_pt =
-	    new NavierStokesWithSingularityBoundaryIntegralFaceElement<ELEMENT>(
-	      bulk_elem_pt,face_index);
-
-	  //We pass the pointer of singular function element to the face element
-	  traction_element_pt->navier_stokes_sing_el_pt()=
-	    dynamic_cast<ScalableSingularityForNavierStokesElement<ELEMENT>*>(
-	      Singular_fct_element_mesh_pt->element_pt(0));
-       
+	  NavierStokesWithSingularityTractionElement<ELEMENT>* traction_element_pt =
+	    new NavierStokesWithSingularityTractionElement<ELEMENT>(
+	      bulk_elem_pt, face_index);
+         
+	  // Set the pointer to the prescribed flux function
+	  traction_element_pt->traction_fct_pt() = 
+	    &Global_Physical_Variables::prescribed_traction;
+         
+	  if (!CommandLineArgs::command_line_flag_has_been_set("--dont_subtract_singularity"))
+	  {
+	    // We pass the pointer of singular function element to the 
+	    // face element (Set function because it also declares 
+	    // the amplitude to be external data for that element).
+	    traction_element_pt->set_navier_stokes_sing_el_pt(
+	      dynamic_cast<ScalableSingularityForNavierStokesElement<ELEMENT>*>(
+		Singular_fct_element_mesh_pt->element_pt(0)));
+	  }
+	    
 	  //Attach it to the mesh
-	  Face_mesh_for_singularity_integral_pt->add_element_pt(traction_element_pt);
+	  Traction_boundary_condition_mesh_pt->add_element_pt(traction_element_pt);
 	}
       }
-   
-      // Update the pointer to the face elements (currently needed so
-      // this GeneralisedElement can assemble the contributions to the
-      // r_C residual from the face elements!
-      dynamic_cast<ScalableSingularityForNavierStokesElement<ELEMENT>*>(
-	Singular_fct_element_mesh_pt->element_pt(0))->
-	set_mesh_of_face_elements(Face_mesh_for_singularity_integral_pt);
-
-
-      // // Now loop over bulk elements 
-      // //----------------------------
-      // // and swap over any of their nodes have been replaced
-      // //----------------------------------------------------
-      // unsigned n_el=Bulk_mesh_pt->nelement();
-      // for (unsigned e=0;e<n_el;e++)
-      //  {
-      //   ELEMENT* bulk_el_pt=dynamic_cast<ELEMENT*>(
-      //    Bulk_mesh_pt->element_pt(e));
-   
-      //   // Loop over all nodes and check if they're amongst the replaced
-      //   // ones
-      //   unsigned nnod=bulk_el_pt->nnode();
-      //   for (unsigned j=0;j<nnod;j++)
-      //    {
-      //     Node* nod_pt=bulk_el_pt->node_pt(j);
-     
-      //     // Find this original node in the map; if we find it
-      //     // it's already been duplicated
-      //     std::map<Node*,Node*>::iterator it=
-      //      existing_duplicate_node_pt.find(nod_pt);
-      //     if (it!=existing_duplicate_node_pt.end())
-      //      {
-      //       // Use the existing duplicate node
-      //       bulk_el_pt->node_pt(j)=(*it).second;
-      //      }
-      //    }   
-      //  }
-
-
     }
+    // Dirichlet boundary conditions
+    else
+    {
+      if (CommandLineArgs::command_line_flag_has_been_set
+	  ("--enforce_dirichlet_bcs_by_lagrange_multipliers"))
+      {
+	// BC elements live on the whole outer boundary:
+	{
+	  for(unsigned i_bound=0;
+	      i_bound<Global_Physical_Variables::Enriched_region_boundary_id; i_bound++)
+	  {
+	    // QUEHACERES delete, we probably want to be unpinning the lagrange multiplier
+	    // instead
+	    // // if we're doing a "do nothing" condition on the outflow, don't want
+	    // // lagrange multipliers / face elements on the outflow boundary
+	    // if(CommandLineArgs::command_line_flag_has_been_set("--do_nothing_outflow_bc"))
+	    // {
+	    //   continue;
+	    // }
+	    unsigned n_element = Bulk_mesh_pt->nboundary_element(i_bound);
+          
+	    // Loop over the bulk elements adjacent to boundary b
+	    for(unsigned e=0; e<n_element; e++)
+	    {
+	      // Get pointer to the bulk element that is adjacent to boundary b
+	      ELEMENT* bulk_elem_pt = dynamic_cast<ELEMENT*>(
+		Bulk_mesh_pt->boundary_element_pt(i_bound, e));
+	      
+	      //Find the index of the face of element e along boundary b 
+	      int face_index = Bulk_mesh_pt->face_index_at_boundary(i_bound, e);
+            
+	      // Build the corresponding bc element
+	      NavierStokesWithSingularityBCFaceElement<ELEMENT>* bc_element_pt = new 
+		NavierStokesWithSingularityBCFaceElement<ELEMENT>
+		(bulk_elem_pt, face_index, BC_el_id);
+            
+	      // Tell the element about the singular fct
+	      if (!CommandLineArgs::command_line_flag_has_been_set
+		  ("--dont_subtract_singularity"))
+	      {
+		bc_element_pt->set_navier_stokes_sing_el_pt(
+		  dynamic_cast<ScalableSingularityForNavierStokesElement<ELEMENT>*>(
+		    Singular_fct_element_mesh_pt->element_pt(0)));
+	      }
+            
+	      //Add the bc element to the surface mesh
+	      Face_mesh_for_bc_pt->add_element_pt(bc_element_pt);
+	    }
+	  }
+	}
+      }
+    }
+
+    if (CommandLineArgs::command_line_flag_has_been_set
+	("--dont_subtract_singularity"))
+    {
+      return;
+    }
+      
+    // QUEHACERES need to update if we re-enable
+    // hierher renable
+
+
+    // // Map keeps a running count of duplicate nodes already created;
+    // // existing_duplicate_node_pt[orig_node_pt]=new_node_pt.
+    // std::map<Node*,Node*> existing_duplicate_node_pt;
+
+
+    // Flux jump elements on boundary 7 of region 1:
+    //----------------------------------------------
+    // NOTE: Since these duplicate nodes, these elements must be
+    //----------------------------------------------------------
+    //       constructed first!
+    //       ------------------
+    // {
+    //  // Where are we? Inside region 1 on boundary 7
+    //  unsigned b=7;
+    //  unsigned region_id=1;
+    //  unsigned nel=Bulk_mesh_pt->nboundary_element_in_region(b,region_id);
+    //  for (unsigned e=0;e<nel;e++)
+    //   {
+    //    FiniteElement* el_pt=
+    //     Bulk_mesh_pt->boundary_element_in_region_pt(b,region_id,e);
+      
+    //    // What is the index of the face of the bulk element at the boundary
+    //    int face_index = Bulk_mesh_pt->
+    //     face_index_at_boundary_in_region(b,region_id,e);
+      
+    //    // Build the corresponding flux jump element
+    //    PoissonWithSingularityFluxJumpFaceElement<ELEMENT>* flux_jump_element_pt 
+    //     = new PoissonWithSingularityFluxJumpFaceElement<ELEMENT>
+    //     (el_pt,face_index,existing_duplicate_node_pt,Flux_jump_el_id);
+
+    //    //Add the flux jump element to the mesh
+    //    Face_mesh_for_flux_jump_pt->add_element_pt(flux_jump_element_pt);
+    //   }
+    // }
+   
+    // Now add all new (duplicated) nodes to mesh
+    // for (std::map<Node*,Node*>::iterator it=
+    //       existing_duplicate_node_pt.begin();
+    //      it!=existing_duplicate_node_pt.end();it++)
+    //  {
+    //   Face_mesh_for_flux_jump_pt->add_node_pt((*it).second);
+    //  }
+
+
+    // Create the face elements needed to compute the amplitude of
+    // the singular function,
+   
+    // Only outer boundaries
+    for(unsigned i_bound=0;
+	i_bound<Global_Physical_Variables::Enriched_region_boundary_id; i_bound++)
+    {
+      unsigned n_element = Bulk_mesh_pt->nboundary_element(i_bound);
+      for(unsigned e=0; e<n_element; e++)
+      {
+	//Create Pointer to bulk element adjacent to the boundary
+	ELEMENT* bulk_elem_pt = dynamic_cast<ELEMENT*>
+	  (Bulk_mesh_pt->boundary_element_pt(i_bound, e));
+       
+	//Get Face index of boundary in the bulk element
+	int face_index = Bulk_mesh_pt->face_index_at_boundary(i_bound, e);
+       
+	//Create corresponding face element
+	NavierStokesWithSingularityBoundaryIntegralFaceElement<ELEMENT>* 
+	  traction_element_pt =
+	  new NavierStokesWithSingularityBoundaryIntegralFaceElement<ELEMENT>(
+	    bulk_elem_pt, face_index);
+
+	//We pass the pointer of singular function element to the face element
+	traction_element_pt->navier_stokes_sing_el_pt() =
+	  dynamic_cast<ScalableSingularityForNavierStokesElement<ELEMENT>*>(
+	    Singular_fct_element_mesh_pt->element_pt(0));
+       
+	//Attach it to the mesh
+	Face_mesh_for_singularity_integral_pt->add_element_pt(traction_element_pt);
+      }
+    }
+   
+    // Update the pointer to the face elements (currently needed so
+    // this GeneralisedElement can assemble the contributions to the
+    // r_C residual from the face elements!
+    dynamic_cast<ScalableSingularityForNavierStokesElement<ELEMENT>*>(
+      Singular_fct_element_mesh_pt->element_pt(0))->
+      set_mesh_of_face_elements(Face_mesh_for_singularity_integral_pt);
+
+
+    // // Now loop over bulk elements 
+    // //----------------------------
+    // // and swap over any of their nodes have been replaced
+    // //----------------------------------------------------
+    // unsigned n_el=Bulk_mesh_pt->nelement();
+    // for (unsigned e=0;e<n_el;e++)
+    //  {
+    //   ELEMENT* bulk_el_pt=dynamic_cast<ELEMENT*>(
+    //    Bulk_mesh_pt->element_pt(e));
+   
+    //   // Loop over all nodes and check if they're amongst the replaced
+    //   // ones
+    //   unsigned nnod=bulk_el_pt->nnode();
+    //   for (unsigned j=0;j<nnod;j++)
+    //    {
+    //     Node* nod_pt=bulk_el_pt->node_pt(j);
+     
+    //     // Find this original node in the map; if we find it
+    //     // it's already been duplicated
+    //     std::map<Node*,Node*>::iterator it=
+    //      existing_duplicate_node_pt.find(nod_pt);
+    //     if (it!=existing_duplicate_node_pt.end())
+    //      {
+    //       // Use the existing duplicate node
+    //       bulk_el_pt->node_pt(j)=(*it).second;
+    //      }
+    //    }   
+    //  }
+  }
  
   /// Pointer to the bulk mesh
   RefineableTriangleMesh<ELEMENT> *Bulk_mesh_pt;
@@ -788,7 +841,6 @@ StepProblem<ELEMENT>::StepProblem()
   Bulk_mesh_pt = Global_Physical_Variables::build_the_mesh<ELEMENT>
     (Global_Physical_Variables::Uniform_element_area);
 
-
   // Set error estimator for bulk mesh
   Z2ErrorEstimator* error_estimator_pt = new Z2ErrorEstimator;
   Bulk_mesh_pt->spatial_error_estimator_pt() = error_estimator_pt;
@@ -819,23 +871,21 @@ StepProblem<ELEMENT>::StepProblem()
   // Add sub-mesh
   add_sub_mesh(Bulk_mesh_pt);
 
-  if (!CommandLineArgs::command_line_flag_has_been_set
-      ("--dont_use_singularity"))
+  if (!CommandLineArgs::command_line_flag_has_been_set("--dont_subtract_singularity"))
   {
     
     // Create element that stores the singular fct and its amplitude
     //---------------------------------------------------------------
-    ScalableSingularityForNavierStokesElement<ELEMENT>* el_pt=
+    ScalableSingularityForNavierStokesElement<ELEMENT>* el_pt =
       new ScalableSingularityForNavierStokesElement<ELEMENT>;
     
     // Pass fct pointers:
-    el_pt->unscaled_singular_fct_pt()
-      =&Global_Physical_Variables::singular_fct;
-    el_pt->gradient_of_unscaled_singular_fct_pt()=
+    el_pt->unscaled_singular_fct_pt() = &Global_Physical_Variables::singular_fct;
+    el_pt->gradient_of_unscaled_singular_fct_pt() =
       &Global_Physical_Variables::gradient_of_singular_fct;
     
     // Add to mesh
-    Singular_fct_element_mesh_pt=new Mesh;
+    Singular_fct_element_mesh_pt = new Mesh;
     Singular_fct_element_mesh_pt->add_element_pt(el_pt);
     add_sub_mesh(Singular_fct_element_mesh_pt);
 
@@ -844,7 +894,7 @@ StepProblem<ELEMENT>::StepProblem()
     //-----------------------------------------------
     // to r_c
     //-------
-    Face_mesh_for_singularity_integral_pt=new Mesh; 
+    Face_mesh_for_singularity_integral_pt = new Mesh; 
 
     
     // Create face elements for flux jump
@@ -865,7 +915,7 @@ StepProblem<ELEMENT>::StepProblem()
   add_sub_mesh(Face_mesh_for_bc_pt);
   add_sub_mesh(Traction_boundary_condition_mesh_pt);
 
-  if (!CommandLineArgs::command_line_flag_has_been_set("--dont_use_singularity"))
+  if (!CommandLineArgs::command_line_flag_has_been_set("--dont_subtract_singularity"))
   {
     // hierher add_sub_mesh(Face_mesh_for_flux_jump_pt);
     
@@ -911,7 +961,7 @@ StepProblem<ELEMENT>::StepProblem()
 template<class ELEMENT>
 void StepProblem<ELEMENT>::complete_problem_setup()
 { 
-  if (!CommandLineArgs::command_line_flag_has_been_set("--dont_use_singularity"))
+  if (!CommandLineArgs::command_line_flag_has_been_set("--dont_subtract_singularity"))
   {   
     // Loop over the elements to set up element-specific
     // things that cannot be handled by constructor
@@ -1000,15 +1050,21 @@ void StepProblem<ELEMENT>::apply_boundary_conditions()
       {
 	pin_it = true;
       }
-    }
-    // QUEHACERES probably remove this case, will be numerical non-convergence if we apply
-    // Dirichlet conditions everywhere
+    }    
     // Otherwise pin everywhere but leave internal boundary alone
     else
     {
       if (ibound != Global_Physical_Variables::Enriched_region_boundary_id) 
       {
 	pin_it = true;
+      }
+      // except if this is the outflow boundary and we're applying a "do nothing"
+      // condition
+      if(ibound == Global_Physical_Variables::Outflow_boundary_id &&
+	 CommandLineArgs::command_line_flag_has_been_set
+	  ("--do_nothing_outflow_bc"))
+      {
+	pin_it = false;
       }
 
       //... but over-rule the lot if we use Lagrange multipliers
@@ -1064,9 +1120,11 @@ void StepProblem<ELEMENT>::apply_boundary_conditions()
   // to enforce bc for sum of FE soln and singuar fct
   // hierher
   // if (!CommandLineArgs::command_line_flag_has_been_set
-  //       ("--dont_use_singularity"))
+  //       ("--dont_subtract_singularity"))
+  if (!CommandLineArgs::command_line_flag_has_been_set(
+	"--enforce_bcs_by_lagrange_multipliers"))
   {
-    // Now unpin nodal values where the bc conditions are enforceed
+    // Now unpin nodal values where the bc conditions are enforced
     // by Lagrange multipliers to ensure that the sum of FE and singular
     // solution is correct
     unsigned nel = Face_mesh_for_bc_pt->nelement();
@@ -1115,7 +1173,19 @@ void StepProblem<ELEMENT>::apply_boundary_conditions()
 	    el_pt->pin_lagrange_multiplier_at_specified_local_node(j, i);
 	  }
         }
-       
+
+	// if we're using Lagrange multipliers to enforce the BCs but we also want a
+	// do nothing condition on the outflow, need to pin the lagrange multipliers on
+	// the outflow boundary
+	if(el_pt->node_pt(j)->is_on_boundary(Global_Physical_Variables::Outflow_boundary_id)
+	   && CommandLineArgs::command_line_flag_has_been_set("--do_nothing_outflow_bc") )
+	{
+	  for(unsigned i=0; i<Dim; i++)
+	  {
+	    el_pt->pin_lagrange_multiplier_at_specified_local_node(j, i);
+	  }
+	}
+	
 	Node* nod_pt = el_pt->node_pt(j);
 
 	Vector<double> x(2);
@@ -1239,7 +1309,7 @@ void StepProblem<ELEMENT>::doc_solution(DocInfo& doc_info)
   some_file.close();
 
   if (!CommandLineArgs::command_line_flag_has_been_set
-      ("--dont_use_singularity"))
+      ("--dont_subtract_singularity"))
   {
     // hierher put into one file and flush trace file for value of C
     sprintf(filename,"%s/suivi_C.dat",doc_info.directory().c_str());
@@ -1307,7 +1377,7 @@ void StepProblem<ELEMENT>::doc_solution(DocInfo& doc_info)
 
 
   if (!CommandLineArgs::command_line_flag_has_been_set
-      ("--dont_use_singularity"))
+      ("--dont_subtract_singularity"))
   {
     oomph_info 
       << "Amplitude of singular function: "
@@ -1359,14 +1429,14 @@ void StepProblem<ELEMENT>::check_condition_number()
 {
  
   // Fake r_c equation?
-  if (Global_Physical_Variables::Problem_type_for_check_condition_number==2)
+  if (Global_Physical_Variables::Problem_type_for_check_condition_number == 2)
   {
-    ScalableSingularityForNavierStokesElement<ELEMENT>* el_pt=
+    ScalableSingularityForNavierStokesElement<ELEMENT>* el_pt =
       dynamic_cast<ScalableSingularityForNavierStokesElement<ELEMENT>*>
       (Singular_fct_element_mesh_pt->element_pt(0));
    
     // Change r_C so that C is assigned directly
-    double imposed_amplitude=1.0;
+    double imposed_amplitude = 1.0;
     el_pt->impose_singular_fct_amplitude(imposed_amplitude);
   }
 
@@ -1492,7 +1562,7 @@ void StepProblem<ELEMENT>::check_residual_for_exact_non_singular_fe_soln
     (Singular_fct_element_mesh_pt->element_pt(0));
   
   unsigned n_dof = el_pt->ndof();
-  Vector<double> residuals(n_dof,0.0);
+  Vector<double> residuals(n_dof, 0.0);
   
   el_pt->fill_in_contribution_to_residuals(residuals);
  
@@ -1574,7 +1644,7 @@ void StepProblem<ELEMENT>::impose_amplitude_runs(DocInfo& doc_info)
     some_file_error.open(filename);
    
 
-    ScalableSingularityForNavierStokesElement<ELEMENT>* el_pt=
+    ScalableSingularityForNavierStokesElement<ELEMENT>* el_pt =
       dynamic_cast<ScalableSingularityForNavierStokesElement<ELEMENT>*>
       (Singular_fct_element_mesh_pt->element_pt(0));
 
@@ -1610,7 +1680,7 @@ void StepProblem<ELEMENT>::impose_amplitude_runs(DocInfo& doc_info)
     Z2ErrorEstimator* z2_pt=dynamic_cast<Z2ErrorEstimator*>(
       Bulk_mesh_pt->spatial_error_estimator_pt());
     double backup=z2_pt->reference_flux_norm();
-    z2_pt->reference_flux_norm()=1.0;
+    z2_pt->reference_flux_norm() = 1.0;
   
     //Bulk_mesh_pt->spatial_error_estimator_pt()->
     z2_pt->get_element_errors(mesh_copy_pt,elementwise_Z2error);
@@ -1663,15 +1733,19 @@ int main(int argc, char **argv)
 {
 
   // Store command line arguments
-  CommandLineArgs::setup(argc,argv);
-  
-  // Don't subtract off singularity
-  CommandLineArgs::specify_command_line_flag(
-    "--dont_use_singularity");
+  CommandLineArgs::setup(argc, argv);
 
+  string dir = "RESLT";
+  CommandLineArgs::specify_command_line_flag("--dir", &dir);
+    
+  // Don't subtract off singularity
+  CommandLineArgs::specify_command_line_flag("--dont_subtract_singularity");
+
+  // don't apply any boundary conditions at the outflow
+  CommandLineArgs::specify_command_line_flag("--do_nothing_outflow_bc");
+  
   // Suppress singular term in exact solution
-  CommandLineArgs::specify_command_line_flag(
-    "--suppress_sing_in_exact_soln");
+  CommandLineArgs::specify_command_line_flag("--suppress_sing_in_exact_soln");
 
   // Do runs where we impose the amplitude via the "fake" r_c equation
   CommandLineArgs::specify_command_line_flag(
@@ -1684,12 +1758,10 @@ int main(int argc, char **argv)
     &Global_Physical_Variables::Problem_type_for_check_condition_number);
 
   // Check the r_c equation
-  CommandLineArgs::specify_command_line_flag
-    ("--check_rc_equation");
+  CommandLineArgs::specify_command_line_flag("--check_rc_equation");
 
   // Scaling factor for domain (defaults to 1.0)
-  CommandLineArgs::specify_command_line_flag(
-    "--scaling_factor_for_domain",
+  CommandLineArgs::specify_command_line_flag("--scaling_factor_for_domain",
     &Global_Physical_Variables::Scaling_factor_for_domain);
  
   // Use Dirichlet boundary conditions (allegedly makes condition
@@ -1699,18 +1771,14 @@ int main(int argc, char **argv)
 
   // Use Dirichlet boundary conditions (allegedly makes condition
   // number (even) worse)
-  CommandLineArgs::specify_command_line_flag(
-    "--use_dirichlet_bcs");
-
-  // Uniform element size in mesh
-  CommandLineArgs::specify_command_line_flag(
-    "--uniform_element_area",
+  CommandLineArgs::specify_command_line_flag("--use_dirichlet_bcs");
+  
+  // uniform target element area
+  CommandLineArgs::specify_command_line_flag("--element_area",
     &Global_Physical_Variables::Uniform_element_area);
 
-
   // Constant in singular solution
-  CommandLineArgs::specify_command_line_flag(
-    "--constant_in_singular_solution",
+  CommandLineArgs::specify_command_line_flag("--constant_in_singular_solution",
     &Global_Physical_Variables::Constant_on_singular_boundary);
 
   // // Max. number of adaptations in code
@@ -1723,7 +1791,6 @@ int main(int argc, char **argv)
  
   // Doc what has actually been specified on the command line
   CommandLineArgs::doc_specified_flags();
-
  
   // hierher tidy
   if (CommandLineArgs::command_line_flag_has_been_set("--use_dirichlet_bcs"))
@@ -1738,7 +1805,7 @@ int main(int argc, char **argv)
   DocInfo doc_info;
  
   // Set output directory
-  doc_info.set_directory("RESLT");
+  doc_info.set_directory(dir.c_str());
  
   // Step number
   doc_info.number() = 0;
@@ -1746,21 +1813,16 @@ int main(int argc, char **argv)
   // Build the problem with 
   StepProblem<ProjectableTaylorHoodElement<MyTNavierStokesElement<2,3> > > problem;
 
-
-
-
   // Check condition number
   //=======================
-  if (CommandLineArgs::command_line_flag_has_been_set
-      ("--check_condition_number"))
+  if (CommandLineArgs::command_line_flag_has_been_set("--check_condition_number"))
   {
     
     // Sorry this is a mess!
     if ((Global_Physical_Variables::Problem_type_for_check_condition_number == 1)
-	&& (!CommandLineArgs::command_line_flag_has_been_set
-	   ("--dont_use_singularity")))
+	&& (!CommandLineArgs::command_line_flag_has_been_set("--dont_subtract_singularity")))
     {
-      oomph_info << "Please specify --dont_use_singularity\n";
+      oomph_info << "Please specify --dont_subtract_singularity\n";
       abort();
     }
 
@@ -1772,8 +1834,6 @@ int main(int argc, char **argv)
     problem.doc_solution(doc_info);
     exit(0);
   }
-
-
 
   // Impose amplitude via fake eqn?
   //================================
