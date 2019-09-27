@@ -103,17 +103,28 @@ namespace Global_Physical_Variables
   /// Radius of internal boundary (surrounding the singularity)
   double Radius_of_internal_boundary = 0.2; // 0.5;
 
+  // half the convex angle of the step
+  double alpha = 3.0 * MathematicalConstants::Pi / 4.0;
+  
   // IDs for the boundaries
   enum
   {
-    Inflow_boundary_id          = 0,
-    Top_boundary_id             = 1,
-    Outflow_boundary_id         = 2,
-    Bottom_boundary_id          = 3,
-    Vertical_step_boundary_id   = 4,
-    Corner_boundary_id          = 5,
-    Horizontal_step_boundary_id = 6,
-    Enriched_region_boundary_id = 7    
+    Inflow_boundary_id                   = 0,
+    Top_boundary_id                      = 1,
+    Outflow_boundary_id                  = 2,
+    Bottom_boundary_id                   = 3,
+    Vertical_step_boundary_id            = 4,
+    Corner_boundary_id                   = 5,
+    Horizontal_step_boundary_id          = 6,
+    Enriched_region_lower_boundary_id    = 7,
+    Enriched_region_upper_boundary_id    = 8,
+    Enriched_region_dividing_boundary_id = 9,
+  };
+
+  enum
+  {
+    Enriched_region_upper_id = 1,
+    Enriched_region_lower_id = 2
   };
   
   // hierher kill
@@ -190,9 +201,6 @@ namespace Global_Physical_Variables
 
     // angle w.r.t. x-axis from the singularity at the corner, coords (L_up, 0)
     double theta = atan2(y, (x[0]-L_up));
-
-    // half the convex angle of the step
-    double alpha = 3.0 * MathematicalConstants::Pi / 4.0;
 
     // angle w.r.t. to axis of symmetry between the two walls of the step,
     // the angle the analytic solution is given in terms of
@@ -555,6 +563,11 @@ private:
   /// Helper function to apply boundary conditions
   void apply_boundary_conditions();
 
+
+  /// Helper function to duplicate the corner node, to allow for a
+  //dipole-like pressure singularity
+  void duplicate_corner_node();
+  
   /// hierher Delete face elements and flush meshes
   void delete_face_elements()
   {
@@ -662,7 +675,7 @@ private:
       {
 	// BC elements live on the whole outer boundary
 	for(unsigned i_bound=0;
-	    i_bound<Global_Physical_Variables::Enriched_region_boundary_id; i_bound++)
+	    i_bound<Global_Physical_Variables::Enriched_region_lower_boundary_id; i_bound++)
 	{	    
 	  unsigned n_element = Bulk_mesh_pt->nboundary_element(i_bound);
           
@@ -755,7 +768,7 @@ private:
    
     // Only outer boundaries
     for(unsigned i_bound=0;
-	i_bound<Global_Physical_Variables::Enriched_region_boundary_id; i_bound++)
+	i_bound<Global_Physical_Variables::Enriched_region_lower_boundary_id; i_bound++)
     {
       unsigned n_element = Bulk_mesh_pt->nboundary_element(i_bound);
       for(unsigned e=0; e<n_element; e++)
@@ -856,6 +869,214 @@ private:
   
 }; // end_of_problem_class
 
+template<class ELEMENT>
+void StepProblem<ELEMENT> :: duplicate_corner_node()
+{
+  
+  // Want elements in the upper region on the plate
+  unsigned b         = Global_Physical_Variables::Enriched_region_dividing_boundary_id;
+  unsigned region_id = Global_Physical_Variables::Enriched_region_upper_id;
+
+  // number of elements in the upper enriched region
+  unsigned nel = Bulk_mesh_pt->nboundary_element_in_region(b, region_id);
+
+  // =========================================
+  
+  oomph_info << "Total number of nodes in mesh before duplication: "
+	     << Bulk_mesh_pt->nnode() << "\n\n" << std::flush; 
+  
+  // map to keep track of nodes we've already duplicated;
+  // map is original node -> new node
+  std::map<Node*,Node*> existing_duplicate_node_pt;
+  
+  // loop over the elements above the plate
+  for (unsigned e=0; e<nel; e++)
+  {
+    // get a pointer to this element
+    FiniteElement* el_pt = Bulk_mesh_pt->boundary_element_in_region_pt(b, region_id, e);
+
+    // get the number of nodes in this element
+    unsigned nnode = el_pt->nnode();
+
+    // loop over nodes
+    for(unsigned j=0; j<nnode; j++)
+    {
+      // get a pointer to the node
+      Node* nod_pt = el_pt->node_pt(j);
+
+      // check if we've found the corner node, i.e. the one which is on both the
+      // region-dividing boundary and the corner boundary
+      bool is_corner_node = nod_pt->is_on_boundary(Global_Physical_Variables::Corner_boundary_id);
+
+      // QUEHACERES debug
+      Vector<double> x(2);
+      x[0] = nod_pt->x(0);
+      x[1] = nod_pt->x(1);
+
+      if(is_corner_node)
+      {	    
+	// Find this original node in the map; if we find it
+	// it's already been duplicated earlier; in that case
+	// use that duplicate rather than creating another one.
+	std::map<Node*,Node*>::iterator it =
+	  existing_duplicate_node_pt.find(nod_pt);
+	    
+	unsigned n_dim           = nod_pt->ndim();
+	unsigned n_position_type = nod_pt->nposition_type();
+	unsigned n_value         = nod_pt->nvalue();
+
+	// check if we've already duplicated this node
+	if (it == existing_duplicate_node_pt.end())
+	{	    
+	  // create a new node
+	  el_pt->node_pt(j) = new BoundaryNode<Node>(n_dim, n_position_type, n_value);
+         
+	  // It has the same coordinate; hierher add history values too
+	  // when implementing as Navier Stokes
+	  for (unsigned i=0; i<n_dim; i++)
+	  {
+	    el_pt->node_pt(j)->x(i) = nod_pt->x(i);
+	  }
+         
+	  // ...and the same values
+	  for (unsigned i=0; i<n_value; i++)
+	  {
+	    el_pt->node_pt(j)->set_value(i, nod_pt->value(i));
+	  }
+
+	  // =================
+	  
+	  // add new node to the new boundary
+	  // el_pt->node_pt(j)->add_to_boundary(new_boundary_id);
+	  // calling this both calls the node pointers function to tell it it's on the boundary,
+	  // and also updates the mesh's list of boundary nodes
+	  Bulk_mesh_pt->add_boundary_node( Global_Physical_Variables::Corner_boundary_id,
+					   el_pt->node_pt(j) );
+	  Bulk_mesh_pt->add_boundary_node( Global_Physical_Variables::Enriched_region_dividing_boundary_id,
+					   el_pt->node_pt(j) );
+	  
+	  // Get/set boundary coordinates
+	  if ( nod_pt->boundary_coordinates_have_been_set_up() )
+	  {
+	    // get number of coordinates on the original plate boundary
+	    unsigned ncoords = nod_pt->ncoordinates_on_boundary(b);
+		
+	    Vector<double> boundary_zeta(ncoords);
+
+	    // get 'em
+	    nod_pt->get_coordinates_on_boundary(
+	      Global_Physical_Variables::Corner_boundary_id, boundary_zeta);
+	    
+	    // set 'em
+	    el_pt->node_pt(j)->set_coordinates_on_boundary(
+	      Global_Physical_Variables::Corner_boundary_id, boundary_zeta);
+
+	    // get 'em
+	    nod_pt->get_coordinates_on_boundary(
+	      Global_Physical_Variables::Enriched_region_dividing_boundary_id, boundary_zeta);
+	    
+	    // set 'em
+	    el_pt->node_pt(j)->set_coordinates_on_boundary(
+	      Global_Physical_Variables::Enriched_region_dividing_boundary_id, boundary_zeta);
+
+	  }
+	  else
+	  {
+	    // hierher throw? (Doesn't happen at the moment, i.e. 
+	    // when this diagnostic was finally commented out)
+             
+	    oomph_info << "No boundary coordinates have been set up"
+		       << " for new local node " << j
+		       << " at : "
+		       << nod_pt->x(0) << " "
+		       << nod_pt->x(1)
+		       << std::endl;
+	  }	    
+	      
+	  // add  new node to the bulk mesh
+	  Bulk_mesh_pt->add_node_pt(el_pt->node_pt(j));
+	      
+	  // Keep track, add entry mapping from the old node to the new node
+	  existing_duplicate_node_pt[nod_pt] = el_pt->node_pt(j);
+	}
+      }
+    }
+  }
+  
+  // QUEHACERES probably need this since we've fiddled the nodes on the plate boundary
+  Bulk_mesh_pt->setup_boundary_element_info();
+
+  // ================================================================================================
+  // Now we've fixed the boundary elements, i.e. the ones who have a edge along the boundary,
+  // we need to fix the adjacent elements who only have a single vertex on the boundary (which
+  // are not considered boundary elements so don't get returned by boundary_element_in_region_pt(...) )
+
+  // Now want element in the upper region on the corner boundary
+  b = Global_Physical_Variables::Corner_boundary_id;
+  
+  // number of elements in the upper enriched region
+  nel = Bulk_mesh_pt->nboundary_element_in_region(b, region_id);
+  
+  // loop over the elements above the plate
+  for (unsigned e=0; e<nel; e++)
+  {
+    // get a pointer to this element
+    FiniteElement* el_pt = Bulk_mesh_pt->boundary_element_in_region_pt(b, region_id, e);
+
+    // get the number of nodes in this element
+    unsigned nnode = el_pt->nnode();
+
+    // loop over nodes
+    for(unsigned j=0; j<nnode; j++)
+    {
+      // get a pointer to the node
+      Node* node_pt = el_pt->node_pt(j);
+
+      // check if we've found the corner node, i.e. the one which is on both the
+      // region-dividing boundary and the corner boundary
+      bool is_corner_node = node_pt->is_on_boundary(
+	Global_Physical_Variables::Enriched_region_dividing_boundary_id);
+  
+      // get coordinates of this node
+      unsigned x_coord = node_pt->x(0);
+      unsigned y_coord = node_pt->x(1);
+
+      if(is_corner_node)
+      {
+	// check our map to find out the correct new node	      
+	std::map<Node*,Node*>::iterator it =
+	  existing_duplicate_node_pt.find(node_pt);
+
+	// did we find it?
+	if (it != existing_duplicate_node_pt.end())
+	{
+	  // update the node pointer
+	  el_pt->node_pt(j) = existing_duplicate_node_pt[node_pt];
+
+	  // should be all we need to do, the boundary info, coordinates, values etc. have already
+	  // been sorted out when we created the new node
+	}	
+	else
+	{
+	  // if we don't find it something weird has happened, because we have a node
+	  // on the original plate boundary that didn't get duplicated
+	  oomph_info << "\nNode: (" << x_coord << ", " << y_coord << "); "
+		     << "Weird tingz have happened here; I've found a node which \n"
+		     <<" is apparently on the original corner boundary, but \n"
+		     << "which didn't get duplicated\n\n";
+	}
+      }
+    }    
+  }
+
+  // ====================================================
+
+  // QUEHACERES debug, final check
+  oomph_info << "Total number of nodes in mesh after duplication: "
+	     << Bulk_mesh_pt->nnode() << "\n\n"; 
+      
+} // end duplicate_plate_nodes_and_add_boundary()
+
 
 //==start_of_constructor==================================================
 /// Constructor for StepProblem problem
@@ -878,7 +1099,7 @@ StepProblem<ELEMENT>::StepProblem()
   Bulk_mesh_pt->min_permitted_error() = 0.0;
 
   // Rescale to shrink domain
-  if(Global_Physical_Variables::Scaling_factor_for_domain!=1.0)
+  if(Global_Physical_Variables::Scaling_factor_for_domain != 1.0)
   {
     unsigned nnode = Bulk_mesh_pt->nnode();
     for(unsigned i=0; i<nnode; i++)
@@ -890,10 +1111,13 @@ StepProblem<ELEMENT>::StepProblem()
 	(nod_pt->x(1));
     }
   }
-    
+  
   // Let's have a look at the boundary enumeration
   Bulk_mesh_pt->output_boundaries("boundaries.dat");
 
+  // duplicate the corner node to allow for a dipole-like pressure discontinuity
+  duplicate_corner_node();
+  
   // Add sub-mesh
   add_sub_mesh(Bulk_mesh_pt);
 
@@ -1074,11 +1298,12 @@ void StepProblem<ELEMENT>::apply_boundary_conditions()
   {   
     bool pin_it = false;
    
-    // Flux problem
+    // Traction problem
     if (Global_Physical_Variables::Do_traction_problem)
     {
       if ( (ibound != Global_Physical_Variables::Outflow_boundary_id) &&
-	   (ibound != Global_Physical_Variables::Enriched_region_boundary_id))
+	   (ibound != Global_Physical_Variables::Enriched_region_lower_boundary_id) &&
+	   (ibound != Global_Physical_Variables::Enriched_region_upper_boundary_id) )
       {
 	pin_it = true;
       }
@@ -1086,7 +1311,8 @@ void StepProblem<ELEMENT>::apply_boundary_conditions()
     // Otherwise pin everywhere but leave internal boundary alone
     else
     {
-      if (ibound != Global_Physical_Variables::Enriched_region_boundary_id) 
+      if (ibound != Global_Physical_Variables::Enriched_region_lower_boundary_id &&
+	  ibound != Global_Physical_Variables::Enriched_region_upper_boundary_id) 
       {
 	pin_it = true;
       }
@@ -1125,7 +1351,8 @@ void StepProblem<ELEMENT>::apply_boundary_conditions()
   for (unsigned ibound=0; ibound<num_bound; ibound++)
   {    
     // Leave internal boundary alone
-    if (ibound != Global_Physical_Variables::Enriched_region_boundary_id)
+    if (ibound != Global_Physical_Variables::Enriched_region_lower_boundary_id &&
+	ibound != Global_Physical_Variables::Enriched_region_upper_boundary_id )
     {
       // loop over the nodes on this boundary
       unsigned num_nod = Bulk_mesh_pt->nboundary_node(ibound);
