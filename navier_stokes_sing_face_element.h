@@ -169,6 +169,13 @@ namespace oomph
       return 0;
     }
 
+    // return a pointer to an output filestream to print out the contributions to the
+    // reciprocal boundary integral which determines the amplitude C
+    std::ofstream*& c_boundary_integral_ofstream_pt()
+    {
+      return C_boundary_integral_ofstream_pt;
+    }
+    
   private:
 
     ///Pointer to singular function
@@ -176,6 +183,9 @@ namespace oomph
 
     ///Pointer to gradient of singular funcion
     GradientOfUnscaledSingSolnFctPt Gradient_of_unscaled_singular_fct_pt;
+
+    // debug filestream for outputting the contributions to the integral which determines C
+    std::ofstream* C_boundary_integral_ofstream_pt;
   };
 
 
@@ -287,8 +297,8 @@ namespace oomph
 	outfile << this->tecplot_zone_string(nplot);
    
 	// Loop over plot points
-	unsigned num_plot_points=this->nplot_points(nplot);
-	for (unsigned iplot=0;iplot<num_plot_points;iplot++)
+	unsigned num_plot_points = this->nplot_points(nplot);
+	for (unsigned iplot=0; iplot<num_plot_points; iplot++)
 	{
 	  // Get local coordinates of plot point
 	  this->get_s_plot(iplot,nplot,s);
@@ -337,7 +347,7 @@ namespace oomph
 
       /// \short Compute this element's contribution to the integral that determines C
       /// Also output into file
-      double get_contribution_integral(std::ofstream &outfile);
+      double get_contribution_integral(std::ofstream& outfile);
  
       /// \short Compute this element's contribution to the integral that determines C
       double get_contribution_integral()
@@ -618,6 +628,7 @@ namespace oomph
     abort();
   }
 
+  // QUEHACERES calculates reciprocity theorem (stress) integral contribution to C equation
   //===========================================================================
   /// Calculate the contribution of the face element to the integral that
   /// determines the amplitude hierher: this will be split into contributions
@@ -625,7 +636,7 @@ namespace oomph
   //===========================================================================
   template<class ELEMENT>
     double NavierStokesWithSingularityBoundaryIntegralFaceElement<ELEMENT>::
-    get_contribution_integral(std::ofstream &outfile)
+    get_contribution_integral(std::ofstream& outfile)
   {
     bool do_output = false;
     if (outfile.is_open())
@@ -703,10 +714,21 @@ namespace oomph
 
       // shorthand
       ELEMENT* bulk_el_pt = dynamic_cast<ELEMENT*>(this->bulk_element_pt());
+
+      // compute the singular contribution to the strain-rate
+      DenseMatrix<double>strain_rate_sing(Dim, Dim, 0.0);
       
+      for (unsigned i=0; i<Dim; i++)
+      {
+	for(unsigned j=0; j<Dim; j++)
+	{
+	  strain_rate_sing(i,j) = 0.5*(dudx_sing(i,j) + dudx_sing(j,i));
+	}
+      }
+	
       // get contribution of singular pressure and singular velocity gradients to stress tensor
       DenseMatrix<double> singular_stress(Dim, Dim);
-      singular_stress = (*bulk_el_pt->stress_fct_pt())(dudx_sing, p_sing);
+      singular_stress = (*bulk_el_pt->stress_fct_pt())(strain_rate_sing, p_sing);
       
       // Get the local bulk coordinates    
       s_bulk = local_coordinate_in_bulk(s);
@@ -733,16 +755,17 @@ namespace oomph
 	  dudx_fe(i,j) = bulk_el_pt->interpolated_dudx_nst(s_bulk, i, j);
 	}
       }
-
+      // get the FE strain rate 1/2(du_i/dx_j + du_j/dx_i)
+      DenseMatrix<double> strain_rate_fe(Dim, Dim);
+      
+      bulk_el_pt->strain_rate(s_bulk, strain_rate_fe);
+      
       // get FE part of the stress
       DenseMatrix<double> stress_fe(Dim, Dim);
-      stress_fe = (*bulk_el_pt->stress_fct_pt())(dudx_fe, p_fe);
-      
-      // QUEHACERES delete
-      /* // Get the Gradient of the FE part of the solution */
-      /* bulk_el_pt->get_flux(s_bulk,flux); */
 
-      // get FE part of the traction - QUEHACERES isn't this always zero?
+      stress_fe = (*bulk_el_pt->stress_fct_pt())(strain_rate_fe, p_fe);
+            
+      // get FE part of the traction
       Vector<double> traction_fe(Dim);
 
       // get traction from bulk element
@@ -832,13 +855,18 @@ namespace oomph
 
       // ================================================
       // Now we compute the contibution of the integral
-      // QUEHACERES again, we're going for the exact version here...
       for(unsigned i=0; i<Dim; i++)
       {
 	for(unsigned j=0; j<Dim; j++)
 	{
-	  integral_result += W * unit_normal[j] * (exact_stress_non_sing(i,j) * u_sing[i]
-						   - singular_stress(i,j) * exact_u_non_sing[i]);
+	  integral_result +=
+	    W * unit_normal[j] * (stress_fe(i,j) * u_sing[i]
+	  			  - singular_stress(i,j) * u_fe[i]);
+	  
+	  // QUEHACERES exact version, but there is no exact stress!
+	  /* integral_result += */
+	  /*   W * unit_normal[j] * (exact_stress_non_sing(i,j) * u_sing[i] */
+	  /* 			  - singular_stress(i,j) * exact_u_non_sing[i]); */
 	}
       } 
     }
@@ -936,7 +964,7 @@ namespace oomph
 #ifdef PARANOID
       // hierher paranoid check null pointers and zero sized vectors    
 #endif
-   
+      
       // Get eqn number of residual that determines C
       int c_local_eqn = internal_local_eqn(0, 0);
       
@@ -953,11 +981,11 @@ namespace oomph
 	{
 	  unsigned n_element = Face_element_mesh_pt->nelement();
 	  for(unsigned e = 0; e<n_element; e++)
-	  {
+	  {	    
 	    residuals[c_local_eqn] += 
 	      dynamic_cast<NavierStokesWithSingularityBoundaryIntegralFaceElement
 	      <BULK_ELEMENT>*>(Face_element_mesh_pt->finite_element_pt(e))->
-	      get_contribution_integral();
+	      get_contribution_integral( ); // *(this->c_boundary_integral_ofstream_pt()) );
 	  }
 	}
       }
@@ -966,6 +994,7 @@ namespace oomph
       /*             << residuals[c_local_eqn] */
       /*             << std::endl; */
     }
+
 
   private:  
   
@@ -1106,7 +1135,7 @@ namespace oomph
 	Vector<double> x(DIM);
 	for(unsigned i=0; i<DIM; i++) 
 	{
-	  x[i]=this->interpolated_x(s,i);
+	  x[i] = this->interpolated_x(s,i);
 	  outfile << x[i] << " ";
 	}
 	
@@ -1531,7 +1560,7 @@ namespace oomph
   { 
 
     // Initialise
-    Navier_stokes_sing_el_pt=0;
+    Navier_stokes_sing_el_pt = 0;
 
     // Let the bulk element build the FaceElement, i.e. setup the pointers 
     // to its nodes (by referring to the appropriate nodes in the bulk
@@ -1543,11 +1572,11 @@ namespace oomph
       //Check that the element is not a refineable 3d element
       ELEMENT* elem_pt = dynamic_cast<ELEMENT*>(bulk_el_pt);
       //If it's three-d
-      if(elem_pt->dim()==3)
+      if(elem_pt->dim() == 3)
       {
 	//Is it refineable
 	RefineableElement* ref_el_pt=dynamic_cast<RefineableElement*>(elem_pt);
-	if(ref_el_pt!=0)
+	if(ref_el_pt != 0)
 	{
 	  if (this->has_hanging_nodes())
 	  {
@@ -1613,7 +1642,7 @@ namespace oomph
 	NavierStokesEquations<2>* eqn_pt = 
 	  dynamic_cast<NavierStokesEquations<2>*>(bulk_el_pt);
 	//If the cast has failed die
-	if(eqn_pt==0)
+	if(eqn_pt == 0)
 	{
 	  std::string error_string =
 	    "Bulk element must inherit from NavierStokesEquations.";
@@ -1704,7 +1733,8 @@ namespace oomph
 
   }
 
-
+  // QUEHACERES compute Lagrange multipliers from BCs; LM contribution to
+  // bulk equations and to C equation
   //===========================================================================
   /// Compute the element's residual vector and the Jacobian matrix.
   //===========================================================================
@@ -1924,7 +1954,7 @@ namespace oomph
 	      {
 		for(unsigned l2=0; l2<n_node; l2++)
 		{
-		  int local_unknown_lambda = nodal_local_eqn(l2, Lambda_index[l2]+d);
+		  int local_unknown_lambda = nodal_local_eqn(l2, Lambda_index[l2] + d);
 		  if (local_unknown_lambda >= 0)
 		  {
 		    jacobian(local_eqn_u_fe, local_unknown_lambda) += psi[l2] * test[l] * W;
@@ -2478,14 +2508,24 @@ namespace oomph
    
       // Get gradient of singular fct (incl. amplitude)
       DenseMatrix<double> dudx_sing(Dim, Dim, 0.0);
-
+      DenseMatrix<double> strain_rate_sing(Dim, Dim, 0.0);
+      
       // Get the values of the singular functions at our current location
       Vector<double> u_sing(Dim+1, 0.0);
       
       if (Navier_stokes_sing_el_pt != 0)
       {
 	dudx_sing = Navier_stokes_sing_el_pt->gradient_of_singular_fct(interpolated_x);
-	u_sing = Navier_stokes_sing_el_pt->singular_fct(interpolated_x);      
+	u_sing = Navier_stokes_sing_el_pt->singular_fct(interpolated_x);
+
+	// compute the singular contribution to the strain-rate
+	for (unsigned i=0; i<Dim; i++)
+	{
+	  for(unsigned j=0; j<Dim; j++)
+	  {
+	    strain_rate_sing(i,j) = 0.5*(dudx_sing(i,j) + dudx_sing(j,i));
+	  }
+	}
       }
 
       // get singular pressure
@@ -2502,7 +2542,7 @@ namespace oomph
 
       if (Navier_stokes_sing_el_pt != 0)
       {
-	stress_sing = (*bulk_elem_pt->stress_fct_pt())(dudx_sing, p_sing);
+	stress_sing = (*bulk_elem_pt->stress_fct_pt())(strain_rate_sing, p_sing);
       }
       // Get traction associated with singular fct
       Vector<double> traction_sing(Dim, 0.0);
